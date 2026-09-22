@@ -516,6 +516,56 @@ describe('SettingsDefaultsManager', () => {
       expect(defaults.CLAUDE_MEM_CLOUD_SYNC_CONTENT_BATCH_SIZE).toBe('40');
       expect(defaults.CLAUDE_MEM_CLOUD_SYNC_REQUEST_TIMEOUT_MS).toBe('90000');
     });
+
+    // The Codex observer's settings (plan section 4). These are the values a
+    // fresh install is seeded with, so a changed default here reaches every
+    // NEW settings.json and nothing else — which is why the cost-relevant ones
+    // (the model, the exec cap, field compression) are worth pinning.
+    it('seeds every CLAUDE_MEM_CODEX_* key with its documented default', () => {
+      const defaults = SettingsDefaultsManager.getAllDefaults();
+
+      expect({
+        model: defaults.CLAUDE_MEM_CODEX_MODEL,
+        summaryModel: defaults.CLAUDE_MEM_CODEX_SUMMARY_MODEL,
+        effort: defaults.CLAUDE_MEM_CODEX_REASONING_EFFORT,
+        verbosity: defaults.CLAUDE_MEM_CODEX_VERBOSITY,
+        timeoutMs: defaults.CLAUDE_MEM_CODEX_TIMEOUT_MS,
+        maxConversationChars: defaults.CLAUDE_MEM_CODEX_MAX_CONVERSATION_CHARS,
+        batchMaxObservations: defaults.CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS,
+        batchMaxChars: defaults.CLAUDE_MEM_CODEX_BATCH_MAX_CHARS,
+        batchLingerMs: defaults.CLAUDE_MEM_CODEX_BATCH_LINGER_MS,
+        fieldCompression: defaults.CLAUDE_MEM_CODEX_FIELD_COMPRESSION,
+        maxExecsPer5h: defaults.CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H,
+        transport: defaults.CLAUDE_MEM_CODEX_TRANSPORT,
+        quotaReservePercent: defaults.CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT,
+        rateLimitProbeMs: defaults.CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS,
+        allowUntestedVersion: defaults.CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION,
+        path: defaults.CLAUDE_MEM_CODEX_PATH,
+        home: defaults.CLAUDE_MEM_CODEX_HOME,
+      }).toEqual({
+        model: 'gpt-5.6-luna',
+        summaryModel: '',
+        effort: 'low',
+        verbosity: 'low',
+        timeoutMs: '180000',
+        maxConversationChars: '120000',
+        batchMaxObservations: '4',
+        batchMaxChars: '48000',
+        batchLingerMs: '2000',
+        fieldCompression: 'false',
+        maxExecsPer5h: '0',
+        transport: 'exec',
+        quotaReservePercent: '0',
+        rateLimitProbeMs: '300000',
+        allowUntestedVersion: 'false',
+        path: '',
+        home: '',
+      });
+      // Selecting codex stays opt-in.
+      expect(defaults.CLAUDE_MEM_PROVIDER).toBe('claude');
+      // The host-integration key of a similar name is a different setting.
+      expect(defaults.CLAUDE_MEM_CODEX_TRANSCRIPT_INGESTION).toBe('false');
+    });
   });
 
   describe('get', () => {

@@ -58,7 +58,10 @@ function makeRoutes(findSessionDbIdByContentSessionId: ReturnType<typeof mock>, 
 }
 
 describe('SessionEnd route', () => {
-  it.each(['claude', 'gemini', 'openrouter'] as const)('formats through the active %s summary provider and model', async provider => {
+  // codex included: without its own case a codex session's wrap-up would be
+  // formatted by Claude — a different provider, plan and model than the
+  // session ran on.
+  it.each(['claude', 'gemini', 'openrouter', 'codex'] as const)('formats through the active %s summary provider and model', async provider => {
     let formatter!: TelegramWrapupFormatter;
     const input: TelegramWrapupFormatterInput = {
       sessionDbId: 42, contentSessionId: 'session', project: 'project', platformSource: 'claude', summaryText: 'whole summary',
@@ -67,12 +70,13 @@ describe('SessionEnd route', () => {
       claude: { formatTelegramWrapup: mock(async () => '• Claude summary') },
       gemini: { formatTelegramWrapup: mock(async () => '• Gemini summary') },
       openrouter: { formatTelegramWrapup: mock(async () => '• OpenRouter summary') },
+      codex: { formatTelegramWrapup: mock(async () => '• Codex summary') },
     };
     const selection = spyOn(providerDispatch, 'selectProviderForGenerator');
     new SessionRoutes({
       getSession: () => ({ currentProvider: provider, lastModelId: 'active-model' }),
       setTelegramWrapupFormatter: (value: TelegramWrapupFormatter) => { formatter = value; },
-    } as any, {} as any, agents.claude as any, agents.gemini as any, agents.openrouter as any, {} as any, {} as any, {} as any);
+    } as any, {} as any, agents.claude as any, agents.gemini as any, agents.openrouter as any, {} as any, {} as any, {} as any, agents.codex as any);
 
     await formatter(input);
 
@@ -81,6 +85,20 @@ describe('SessionEnd route', () => {
     for (const [name, agent] of Object.entries(agents)) {
       if (name !== provider) expect(agent.formatTelegramWrapup).not.toHaveBeenCalled();
     }
+  });
+
+  it('refuses the wrap-up with setup_required when the worker has no codex agent', async () => {
+    let formatter!: TelegramWrapupFormatter;
+    const claude = { formatTelegramWrapup: mock(async () => '• Claude summary') };
+    new SessionRoutes({
+      getSession: () => ({ currentProvider: 'codex', lastModelId: 'gpt-5.6-luna' }),
+      setTelegramWrapupFormatter: (value: TelegramWrapupFormatter) => { formatter = value; },
+    } as any, {} as any, claude as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+
+    await expect(formatter({
+      sessionDbId: 42, contentSessionId: 'session', project: 'project', platformSource: 'claude', summaryText: 'whole summary',
+    })).rejects.toThrow(/no codex agent/);
+    expect(claude.formatTelegramWrapup).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('uses normal provider dispatch for a replay and releases the probe (failure: %s)', async fail => {

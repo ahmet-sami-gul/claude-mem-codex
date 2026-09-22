@@ -19,7 +19,7 @@ import { logger } from '../../../../src/utils/logger.js';
 import * as realProviderDispatch from '../../../../src/services/worker/provider-dispatch.js';
 const realProviderDispatchSnapshot = { ...realProviderDispatch };
 
-const providerSelectionBox: { current: 'claude' | 'gemini' | 'openrouter' } = { current: 'claude' };
+const providerSelectionBox: { current: 'claude' | 'gemini' | 'openrouter' | 'codex' } = { current: 'claude' };
 
 mock.module('../../../../src/services/worker/provider-dispatch.js', () => ({
   ...realProviderDispatchSnapshot,
@@ -33,6 +33,12 @@ import { getProcessRegistry, waitForSlot, isSessionParkedForSlot } from '../../.
 import { guardSharedProcessRegistrySingleton } from '../../../supervisor/process-registry-singleton-guard.js';
 import { guardSharedQuotaCooldownSingleton } from '../../../shared/quota-cooldown-singleton-guard.js';
 import { clearDependencyStatus } from '../../../../src/shared/dependency-health.js';
+import {
+  getQuotaCooldown,
+  recordQuotaExhausted,
+  resetQuotaCooldownsForTesting,
+} from '../../../../src/shared/quota-cooldown.js';
+import { ClassifiedProviderError, isClassified } from '../../../../src/services/worker/provider-errors.js';
 import type { ActiveSession, ConversationMessage } from '../../../../src/services/worker-types.js';
 
 /**
@@ -99,6 +105,8 @@ function makeRoutes(session: ActiveSession, agents: {
   sdkAgent: { startSession: ReturnType<typeof mock> };
   geminiAgent: { startSession: ReturnType<typeof mock> };
   openRouterAgent: { startSession: ReturnType<typeof mock> };
+  /** Omitted on purpose by the "worker built without codex" test below. */
+  codexAgent?: { startSession: ReturnType<typeof mock> };
 }) {
   const messageBuffer = makeFakeMessageBuffer();
   const sessionManager = {
@@ -119,6 +127,7 @@ function makeRoutes(session: ActiveSession, agents: {
     {} as any, // eventBroadcaster — unused by ensureGeneratorRunning
     {} as any, // workerService
     completionHandler as any,
+    agents.codexAgent as any,
   );
 
   return { routes, sessionManager, completionHandler, messageBuffer };
@@ -322,6 +331,152 @@ describe('SessionRoutes.ensureGeneratorRunning — provider switch (#2756)', () 
     expect(session.abortController).toBe(originalAbortController);
     expect(session.currentProvider).toBe('openrouter');
     expect(sdkAgent.startSession).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The Codex provider is dispatched like any other, with one difference that
+   * matters on a paid plan: selecting it must never end up running the session
+   * somewhere else.
+   */
+  describe('codex selection', () => {
+    it('starts the Codex agent when dispatch selects codex', async () => {
+      const sessionDbId = 900101;
+      const session = makeFakeSession(sessionDbId);
+
+      const sdkAgent = { startSession: mock(() => Promise.resolve()) };
+      const geminiAgent = { startSession: mock(() => Promise.resolve()) };
+      const openRouterAgent = { startSession: mock(() => Promise.resolve()) };
+      const codexAgent = { startSession: mock(() => new Promise<void>(() => {})) };
+
+      const { routes } = makeRoutes(session, { sdkAgent, geminiAgent, openRouterAgent, codexAgent });
+
+      providerSelectionBox.current = 'codex';
+      await routes.ensureGeneratorRunning(sessionDbId, 'init');
+
+      expect(codexAgent.startSession).toHaveBeenCalledTimes(1);
+      expect(session.currentProvider).toBe('codex');
+      expect(sdkAgent.startSession).not.toHaveBeenCalled();
+      expect(geminiAgent.startSession).not.toHaveBeenCalled();
+      expect(openRouterAgent.startSession).not.toHaveBeenCalled();
+    });
+
+    it('raises setup_required rather than silently running the session on Claude when no codex agent exists', async () => {
+      const sessionDbId = 900102;
+      const session = makeFakeSession(sessionDbId);
+
+      const sdkAgent = { startSession: mock(() => Promise.resolve()) };
+      const geminiAgent = { startSession: mock(() => Promise.resolve()) };
+      const openRouterAgent = { startSession: mock(() => Promise.resolve()) };
+
+      const { routes } = makeRoutes(session, { sdkAgent, geminiAgent, openRouterAgent });
+
+      providerSelectionBox.current = 'codex';
+      const error = await routes.ensureGeneratorRunning(sessionDbId, 'init')
+        .then(() => null, (thrown: unknown) => thrown);
+
+      expect(isClassified(error) && error.kind).toBe('setup_required');
+      expect(isClassified(error) && error.code).toBe('observer_agent_missing');
+      expect(sdkAgent.startSession).not.toHaveBeenCalled();
+      expect(session.currentProvider).toBeNull();
+    });
+
+    /**
+     * admitAndStartGenerator resolves the agent BEFORE claiming the quota
+     * probe, because a provider with no agent cannot start and claiming first
+     * would leave that claim outstanding with no generator `.finally()` to
+     * release it. Pinned by arming the codex breaker: while a window is armed,
+     * tryAdmitQuotaProbe refuses admission and the method RETURNS QUIETLY — so
+     * if the agent lookup ever moves below the admission, the missing-agent
+     * failure is swallowed and this test fails.
+     *
+     * (The gateway re-probe half of that catch is deliberately not asserted:
+     * selectProviderForGenerator returns a null gatewayProbeClaimId for codex
+     * unconditionally, so there is no such claim to leak.)
+     */
+    it('resolves the codex agent before claiming the quota probe', async () => {
+      const sessionDbId = 900103;
+      const session = makeFakeSession(sessionDbId);
+
+      const sdkAgent = { startSession: mock(() => Promise.resolve()) };
+      const geminiAgent = { startSession: mock(() => Promise.resolve()) };
+      const openRouterAgent = { startSession: mock(() => Promise.resolve()) };
+      const { routes } = makeRoutes(session, { sdkAgent, geminiAgent, openRouterAgent });
+
+      recordQuotaExhausted('codex', 'usage limit reached');
+      try {
+        providerSelectionBox.current = 'codex';
+        const error = await routes.ensureGeneratorRunning(sessionDbId, 'init')
+          .then(() => null, (thrown: unknown) => thrown);
+
+        expect(isClassified(error) && error.code).toBe('observer_agent_missing');
+        // And nothing claimed the single post-cooldown probe on the way out.
+        expect(getQuotaCooldown('codex')?.probeInFlightSinceMs).toBeNull();
+        expect(getQuotaCooldown('codex')?.probeClaimId).toBeNull();
+      } finally {
+        resetQuotaCooldownsForTesting();
+      }
+    });
+
+    /**
+     * `setup_required` means the provider was never asked anything: the
+     * observer is not installed, not logged in, or (for codex) not yet
+     * verified by the lockdown self-check. Nothing was claimed and nothing
+     * failed, so the generator-exit path must NOT finalize the session —
+     * preservingAbortReason has no setup_required case, so handleGeneratorExit
+     * would run with abortCategory '' and dispose the in-RAM buffer, throwing
+     * away the observations captured while the setup was incomplete. The codex
+     * readiness gate has exactly this shape on the first ingest after every
+     * worker start, which is why the skip cannot be Claude-only.
+     */
+    it('preserves the session and its buffered work when a codex start needs setup', async () => {
+      const sessionDbId = 900104;
+      const session = makeFakeSession(sessionDbId);
+
+      const setupRequired = new ClassifiedProviderError('Codex observer is not ready', {
+        kind: 'setup_required',
+        cause: new Error('codex observer not configured'),
+        code: 'codex_setup_required',
+      });
+      const sdkAgent = { startSession: mock(() => Promise.resolve()) };
+      const geminiAgent = { startSession: mock(() => Promise.resolve()) };
+      const openRouterAgent = { startSession: mock(() => Promise.resolve()) };
+      const codexAgent = { startSession: mock(() => Promise.reject(setupRequired)) };
+
+      const { routes, sessionManager, completionHandler, messageBuffer } =
+        makeRoutes(session, { sdkAgent, geminiAgent, openRouterAgent, codexAgent });
+      messageBuffer.getPendingCount.mockImplementation(() => 3);
+
+      providerSelectionBox.current = 'codex';
+      await routes.ensureGeneratorRunning(sessionDbId, 'init');
+      await session.generatorPromise;
+
+      expect(codexAgent.startSession).toHaveBeenCalledTimes(1);
+      // The whole point: the buffer survives to be drained by the next start.
+      expect(completionHandler.finalizeSession).not.toHaveBeenCalled();
+      expect(sessionManager.removeSessionImmediate).not.toHaveBeenCalled();
+      // ...and the session is left startable again.
+      expect(session.generatorPromise).toBeNull();
+      expect(session.currentProvider).toBeNull();
+    });
+
+    it('still finalizes a session whose codex generator fails for a real reason', async () => {
+      const sessionDbId = 900105;
+      const session = makeFakeSession(sessionDbId);
+
+      const sdkAgent = { startSession: mock(() => Promise.resolve()) };
+      const geminiAgent = { startSession: mock(() => Promise.resolve()) };
+      const openRouterAgent = { startSession: mock(() => Promise.resolve()) };
+      const codexAgent = { startSession: mock(() => Promise.reject(new Error('codex exec crashed'))) };
+
+      const { routes, completionHandler } =
+        makeRoutes(session, { sdkAgent, geminiAgent, openRouterAgent, codexAgent });
+
+      providerSelectionBox.current = 'codex';
+      await routes.ensureGeneratorRunning(sessionDbId, 'init');
+      await session.generatorPromise;
+
+      expect(completionHandler.finalizeSession).toHaveBeenCalledTimes(1);
+    });
   });
 
   /**

@@ -1,10 +1,22 @@
 
 import type { Response } from 'express';
+import type { ClassifiedProviderError } from './worker/provider-errors.js';
 
 export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
 }
+
+/**
+ * The observer providers dispatch can choose between.
+ *
+ * Declared here rather than in provider-dispatch so the worker's type module
+ * stays a leaf — dispatch pulls in the provider modules, which pull in this
+ * file, and a type-only cycle back through them would be a needless one.
+ * provider-dispatch re-exports this name, so `ObserverProvider` means the same
+ * union wherever it is imported from.
+ */
+export type ObserverProvider = 'claude' | 'gemini' | 'openrouter' | 'codex';
 
 export interface ActiveSession {
   sessionDbId: number;
@@ -22,7 +34,7 @@ export interface ActiveSession {
   earliestPendingTimestamp: number | null;  
   claimedMessageIds: number[];
   conversationHistory: ConversationMessage[];  
-  currentProvider: 'claude' | 'gemini' | 'openrouter' | null;
+  currentProvider: ObserverProvider | null;
   consecutiveRestarts: number;
   /**
    * Legacy invalid-output counter, intentionally always 0: ordinary non-XML
@@ -86,6 +98,20 @@ export interface ActiveSession {
   telegramWrapupRequestedAt?: number | null;
   /** One-shot grace timer for a SessionEnd wrap-up request. */
   telegramWrapupTimer?: ReturnType<typeof setTimeout> | null;
+  /**
+   * The classified failure that ended the latest generator run, stashed by the
+   * shared provider error policy before it aborts. Readers downstream of the
+   * abort (status, observer health, a provider's own quota circuit) need the
+   * kind/code/retryAfterMs structurally; re-deriving them from abortReason's
+   * string would lose everything but the category.
+   */
+  lastProviderError?: ClassifiedProviderError | null;
+  /**
+   * A single-probe claim held by this session's generator while a provider's
+   * quota breaker lets exactly one caller re-probe. Must be handed back when
+   * the run ends, the same way `gatewayProbeClaimId` is.
+   */
+  quotaProbeClaimId?: number | null;
 }
 
 export interface PendingMessage {

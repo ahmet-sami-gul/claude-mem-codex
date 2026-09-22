@@ -23,6 +23,16 @@ export interface ManagedProcessInfo {
   sessionId?: string | number;
   startedAt: string;
   pgid?: number;
+  /**
+   * What this process is to its session. Absent means "the session's own
+   * generator", which is the only kind that existed before: it is the record
+   * getSdkProcessForSession returns and therefore the one a generator exit
+   * reaps. 'aux' marks an off-band process that runs under a session's id
+   * without being that session's generator (the Codex Telegram wrap-up), so
+   * teardown does not mistake one for the other. Slot accounting is unchanged
+   * — an 'aux' process is still a type 'sdk' record and still occupies a slot.
+   */
+  role?: 'aux';
 }
 
 export interface ManagedProcessRecord extends ManagedProcessInfo {
@@ -366,7 +376,11 @@ export interface TrackedSdkProcess {
 
 export function getSdkProcessForSession(sessionDbId: number): TrackedSdkProcess | undefined {
   const registry = getProcessRegistry();
-  const matches = registry.getBySession(sessionDbId).filter(r => r.type === 'sdk');
+  // Only the session's own generator process. An 'aux' record (a Codex
+  // Telegram wrap-up, say) runs under this session's id but is not what a
+  // generator exit is looking for, and returning one would both let the
+  // wrap-up be SIGKILLed and leave the generator's real process unreaped.
+  const matches = registry.getBySession(sessionDbId).filter(r => r.type === 'sdk' && !r.role);
 
   if (matches.length > 1) {
     logger.warn('PROCESS', `Multiple SDK processes found for session ${sessionDbId}`, {
@@ -659,6 +673,8 @@ export interface SpawnSdkOptions {
   command: string;
   args: string[];
   extraArgs?: string[];
+  /** See ManagedProcessInfo.role: 'aux' keeps this process out of the session's teardown lookup. */
+  role?: 'aux';
   // Part of the Claude SDK callback contract. Accepted at this trust boundary
   // so callers remain compatible, but deliberately ignored for isolation.
   cwd?: string;
@@ -772,6 +788,7 @@ export function spawnSdkProcess(
     sessionId: sessionDbId,
     startedAt: new Date().toISOString(),
     pgid,
+    ...(options.role ? { role: options.role } : {}),
   }, child);
 
   child.on('exit', () => {
@@ -853,7 +870,9 @@ export function createSdkSpawnFactory(sessionDbId: number, slotReservation?: Slo
   return (spawnOptions: SpawnSdkOptions): SpawnedSdkProcess => {
     const registry = getProcessRegistry();
 
-    const existing = registry.getBySession(sessionDbId).filter(r => r.type === 'sdk');
+    // Same exclusion as getSdkProcessForSession: an off-band 'aux' process is
+    // not a duplicate generator and must not be SIGTERMed as one.
+    const existing = registry.getBySession(sessionDbId).filter(r => r.type === 'sdk' && !r.role);
     for (const record of existing) {
       if (!isPidAlive(record.pid)) continue;
       try {

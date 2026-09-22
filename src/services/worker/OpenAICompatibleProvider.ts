@@ -1,27 +1,27 @@
 import { DatabaseManager } from './DatabaseManager.js';
 import { SessionManager } from './SessionManager.js';
 import { logger } from '../../utils/logger.js';
-import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
+import { SettingsDefaultsManager, type SettingsDefaults } from '../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../shared/paths.js';
 import { buildInitPrompt, buildObservationPrompt, buildSummaryPrompt, buildContinuationPrompt } from '../../sdk/prompts.js';
 import type { ActiveSession, ConversationMessage } from '../worker-types.js';
 import { ModeManager } from '../domain/ModeManager.js';
 import type { ModeConfig } from '../domain/types.js';
 import { resolveSummaryTierModel } from './model-aliases.js';
-import { isClassified, type ClassifiedProviderError } from './provider-errors.js';
+import { isClassified } from './provider-errors.js';
 import {
   shouldRecycleConversation,
   conversationChars,
   resolveConversationMaxChars,
 } from '../../shared/observer-recycle.js';
 import { recycleObserverConversation, loadSessionStartContext } from './session/recycle-conversation.js';
-import { optimizeObservationFields, buildFieldCompressionPrompt } from './field-optimizer.js';
+import { optimizeObservationFields, buildFieldCompressionPrompt, type FieldCompressor } from './field-optimizer.js';
 import { buildTelegramWrapupPrompt, type TelegramWrapupFormatterInput } from '../integrations/TelegramWrapupNotifier.js';
+import { handleSessionError as applyProviderErrorPolicy } from './session/provider-error-policy.js';
 
 import {
   processAgentResponse,
   snapshotResponseContext,
-  isAbortError,
   type WorkerRef
 } from './agents/index.js';
 
@@ -42,6 +42,42 @@ export interface ProviderQueryResult {
 }
 
 /**
+ * The minimum a provider config must carry for the shared lifecycle to run.
+ *
+ * `apiKey` is optional because a provider need not have one: a CLI-backed
+ * provider authenticates through the binary's own session. Key-based providers
+ * keep declaring it as required in their own config type, and the default
+ * `isConfigured` still reads it.
+ */
+export interface ProviderConfigBase {
+  model: string;
+  apiKey?: string;
+  plainText?: boolean;
+}
+
+/**
+ * Which call site a `query()` came from, and the session behind it.
+ *
+ * Only handed to providers that opt in via `wantsQueryContext`; a provider that
+ * does not need it is never called with a fourth argument.
+ */
+export interface ProviderQueryContext {
+  purpose: 'init' | 'observation' | 'summary' | 'field-compression' | 'telegram-wrapup';
+  /** Absent for the Telegram wrap-up, which formats a stored summary with no live session. */
+  session?: ActiveSession;
+  /**
+   * The session this call belongs to when there is no live `session` object —
+   * only the Telegram wrap-up, which is formatted from a stored summary. A
+   * provider that spawns a subprocess still has to attribute it to a session
+   * (jail directory, process registry, logs), and the wrap-up's own input
+   * carries the id — and the field-compression call, which carries it beside
+   * `session` so the id is readable without unwrapping the session. The three
+   * lifecycle calls read it off `session`.
+   */
+  sessionDbId?: number;
+}
+
+/**
  * Shared scaffolding for OpenAI-compatible, multi-turn HTTP providers
  * (Gemini, OpenRouter). The session lifecycle — synthetic memory-session-id
  * generation, init/continuation prompt, the observation/summary message loop,
@@ -49,8 +85,15 @@ export interface ProviderQueryResult {
  * truncation — is identical between them. Per-provider differences (config
  * resolution, request shape, token estimation, usage/cost reporting) are
  * supplied by abstract members.
+ *
+ * A second family of members — the opt-in hooks below (`isConfigured`,
+ * `wantsQueryContext`, `fieldCompressor`, `resolveSummaryModel`,
+ * `adoptForeignMemorySessionId`, `conversationMaxChars`) — exists for
+ * providers that are not HTTP-and-a-key, such as a local CLI. Every one of
+ * them defaults to what this class did before the hook existed, so a provider
+ * that overrides nothing behaves identically to how it behaved without them.
  */
-export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string; model: string; plainText?: boolean }> {
+export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBase> {
   protected dbManager: DatabaseManager;
   protected sessionManager: SessionManager;
 
@@ -65,6 +108,25 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
    * preserves that per-provider divergence.
    */
   protected abstract readonly forwardEmptyMessageResponse: boolean;
+  /**
+   * Whether `query()` is invoked with the fourth `ctx` argument.
+   *
+   * Deliberately not "always pass it and let providers ignore it": Gemini's and
+   * OpenRouter's call shape is asserted argument-for-argument by their tests,
+   * and a silent extra argument is exactly the kind of drift those assertions
+   * exist to catch. With this false — the default — a query is issued with the
+   * same two (or, from the field compressor, three) arguments as before.
+   */
+  protected readonly wantsQueryContext: boolean = false;
+  /**
+   * Whether a persisted memory_session_id written by a DIFFERENT provider may
+   * be adopted instead of replaced.
+   *
+   * False — the default and the long-standing behaviour — means only this
+   * provider's own `${syntheticIdPrefix}-${contentSessionId}-` ids are reused,
+   * and anything else is superseded by a freshly generated one.
+   */
+  protected readonly adoptForeignMemorySessionId: boolean = false;
 
   constructor(dbManager: DatabaseManager, sessionManager: SessionManager) {
     this.dbManager = dbManager;
@@ -77,8 +139,44 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
   /** Throw a provider-specific "API key not configured" error. */
   protected abstract missingApiKeyError(): Error;
 
-  /** Issue the actual HTTP request and normalize its response. */
-  protected abstract query(history: ConversationMessage[], config: TConfig, signal?: AbortSignal): Promise<ProviderQueryResult>;
+  /**
+   * Whether the resolved config is usable. Default: a non-empty API key — the
+   * identical check the two `!config.apiKey` sites performed. A provider whose
+   * readiness is something else (a resolved binary, a passed self-check)
+   * overrides this; `missingApiKeyError()` is still what a false answer throws.
+   */
+  protected isConfigured(config: TConfig): boolean {
+    return Boolean(config.apiKey);
+  }
+
+  /**
+   * Issue the actual HTTP request and normalize its response. `ctx` is only
+   * supplied when `wantsQueryContext` is true.
+   */
+  protected abstract query(
+    history: ConversationMessage[],
+    config: TConfig,
+    signal?: AbortSignal,
+    ctx?: ProviderQueryContext,
+  ): Promise<ProviderQueryResult>;
+
+  /**
+   * The single place a query leaves this class, so the opt-in context cannot
+   * change any existing provider's call shape by accident.
+   */
+  private invokeQuery(
+    history: ConversationMessage[],
+    config: TConfig,
+    signal: AbortSignal | undefined,
+    ctx: ProviderQueryContext,
+  ): Promise<ProviderQueryResult> {
+    if (this.wantsQueryContext) {
+      return this.query(history, config, signal, ctx);
+    }
+    return signal === undefined
+      ? this.query(history, config)
+      : this.query(history, config, signal);
+  }
 
   /**
    * One bounded, standalone call that condenses an oversized tool payload.
@@ -86,14 +184,50 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
    * Issued off to the side with its own single-message history: adding it to
    * `session.conversationHistory` would grow the very conversation the recycle
    * logic exists to bound.
+   *
+   * The trailing `session` is the observation's own session. It is optional so
+   * the first four parameters — name, order and types — are exactly what they
+   * were, but the lifecycle always passes it: a provider that spawns a
+   * subprocess per call has to attribute that subprocess to a real session
+   * (jail directory, process registry, security audit, per-session violation
+   * counters), and a compression turn with no session attributed itself to
+   * sessionDbId 0, i.e. to a shared directory and a process-wide counter that
+   * belongs to no session at all.
    */
-  private async compressField(text: string, budgetChars: number, config: TConfig, signal: AbortSignal): Promise<string | null> {
-    const result = await this.query(
+  private async compressField(
+    text: string,
+    budgetChars: number,
+    config: TConfig,
+    signal: AbortSignal,
+    session?: ActiveSession,
+  ): Promise<string | null> {
+    const result = await this.invokeQuery(
       [{ role: 'user', content: buildFieldCompressionPrompt(text, budgetChars) }],
       config,
       signal,
+      {
+        purpose: 'field-compression',
+        ...(session ? { session, sessionDbId: session.sessionDbId } : {}),
+      },
     );
     return result.content || null;
+  }
+
+  /**
+   * The field compressor handed to `optimizeObservationFields`, or null to skip
+   * that pass entirely.
+   *
+   * Default: the bounded `compressField` call above, i.e. exactly what was
+   * passed inline before. Null exists for a provider where a second model call
+   * per oversized field is not a rounding error — a metered CLI turn, say —
+   * and the observation is better off going through the existing truncation.
+   *
+   * `session` is the session whose observation is being compressed; the default
+   * only forwards it into the query context, so a provider that ignores the
+   * context is unaffected by it.
+   */
+  protected fieldCompressor(config: TConfig, session?: ActiveSession): FieldCompressor | null {
+    return (text, budgetChars, signal) => this.compressField(text, budgetChars, config, signal, session);
   }
 
   /** Format a stored summary through this provider's normal summary-model query path. */
@@ -102,15 +236,24 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     activeModelId?: string,
   ): Promise<string> {
     const config = this.getConfig();
-    if (!config.apiKey) {
+    if (!this.isConfigured(config)) {
       throw this.missingApiKeyError();
     }
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-    const model = resolveSummaryTierModel(activeModelId ?? config.model, settings);
+    // Same resolution input as before — `activeModelId ?? config.model` — but
+    // handed over as a config, so a provider that overrides resolveSummaryModel
+    // sees everything it resolved rather than a bare model string.
+    const activeModel = activeModelId ?? config.model;
+    const model = this.resolveSummaryModel(
+      activeModel === config.model ? config : { ...config, model: activeModel },
+      settings,
+    );
     const summaryConfig = { ...config, model, plainText: true };
-    const result = await this.query(
+    const result = await this.invokeQuery(
       [{ role: 'user', content: buildTelegramWrapupPrompt(input.summaryText) }],
       summaryConfig,
+      undefined,
+      { purpose: 'telegram-wrapup', sessionDbId: input.sessionDbId },
     );
     if (!result.content?.trim()) {
       const error = new Error(`${this.providerName} returned no text for the Telegram wrap-up`);
@@ -129,8 +272,25 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
   /** Hook for per-session setup that runs once config is resolved (e.g. endpointClass). */
   protected prepareSessionExtras(_session: ActiveSession, _config: TConfig): void {}
 
-  /** Character budget for one observer generation, operator-overridable (#3800). */
-  protected conversationMaxChars(): number {
+  /**
+   * The model a summary (and the Telegram wrap-up) is sent to.
+   *
+   * Default: the shared tier routing, resolved from the config's own model —
+   * identical to the two `resolveSummaryTierModel(...)` calls this replaced. A
+   * provider whose model ids are not the tier namespace overrides it so a
+   * `$TIER:` alias meant for another backend can never leak into its request.
+   */
+  protected resolveSummaryModel(config: TConfig, settings: SettingsDefaults): string {
+    return resolveSummaryTierModel(config.model, settings);
+  }
+
+  /**
+   * Character budget for one observer generation, operator-overridable (#3800).
+   *
+   * The session is passed so a provider can scope the budget to it; the default
+   * ignores it and reads the one operator setting, exactly as before.
+   */
+  protected conversationMaxChars(_session?: ActiveSession): number {
     return resolveConversationMaxChars(
       SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_OBSERVER_MAX_CONVERSATION_CHARS
     );
@@ -138,25 +298,52 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
 
   async startSession(session: ActiveSession, worker?: WorkerRef): Promise<void> {
     const config = this.getConfig();
-    const { apiKey, model } = config;
+    const { model } = config;
     session.lastModelId = model;
     this.prepareSessionExtras(session, config);
 
-    if (!apiKey) {
-      throw this.missingApiKeyError();
+    if (!this.isConfigured(config)) {
+      const notReady = this.missingApiKeyError();
+      // This gate throws BEFORE either try/catch below, so the shared error
+      // policy never sees it and `session.lastProviderError` would keep
+      // describing some earlier run. Stash it here so the field always
+      // describes the failure that ended THIS run. No-op for a provider whose
+      // readiness error is a plain Error (Gemini, OpenRouter).
+      if (isClassified(notReady)) {
+        session.lastProviderError = notReady;
+      }
+      throw notReady;
     }
 
     if (!session.memorySessionId) {
       const persistedMemorySessionId = this.dbManager.getSessionById(session.sessionDbId).memory_session_id;
       const syntheticIdPrefix = `${this.syntheticIdPrefix}-${session.contentSessionId}-`;
 
-      if (persistedMemorySessionId?.startsWith(syntheticIdPrefix)) {
-        session.memorySessionId = persistedMemorySessionId;
+      // Foreign-id adoption is opt-in: by default only this provider's own
+      // synthetic ids are reusable, and anything else is superseded — which is
+      // what every provider did before this hook existed.
+      const reusableMemorySessionId =
+        persistedMemorySessionId
+        && (persistedMemorySessionId.startsWith(syntheticIdPrefix) || this.adoptForeignMemorySessionId)
+          ? persistedMemorySessionId
+          : null;
+
+      if (reusableMemorySessionId) {
+        session.memorySessionId = reusableMemorySessionId;
         logger.info('SESSION', `MEMORY_ID_REUSED | sessionDbId=${session.sessionDbId} | provider=${this.providerName}`);
       } else {
         const syntheticMemorySessionId = `${syntheticIdPrefix}${Date.now()}`;
         session.memorySessionId = syntheticMemorySessionId;
-        this.dbManager.getSessionStore().updateMemorySessionId(session.sessionDbId, syntheticMemorySessionId);
+        // The same flag that adopts a foreign id also declines to PUBLISH a
+        // generated one at session start: updateMemorySessionId UPDATEs
+        // sdk_sessions and requeues a prompt sync, which is wasted work for a
+        // session that may never store anything (setup gate, guard kill,
+        // content policy). The id is kept in memory and written by
+        // ensureMemorySessionIdRegistered on the first store instead. Providers
+        // that do not opt in keep writing it here, exactly as before.
+        if (!this.adoptForeignMemorySessionId) {
+          this.dbManager.getSessionStore().updateMemorySessionId(session.sessionDbId, syntheticMemorySessionId);
+        }
         logger.info('SESSION', `MEMORY_ID_GENERATED | sessionDbId=${session.sessionDbId} | provider=${this.providerName}`);
       }
     }
@@ -175,7 +362,9 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     try {
       session.lastPromptSentAt = Date.now();
       session.lastGeneratorSource = 'init';
-      const initResponse = await this.query(session.conversationHistory, config);
+      const initResponse = await this.invokeQuery(
+        session.conversationHistory, config, undefined, { purpose: 'init', session },
+      );
       this.handleInitResponse(initResponse, session, model);
     } catch (error: unknown) {
       // Classified errors are logged once, at SessionRoutes' `Observer failed`
@@ -278,7 +467,7 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     // Retire a full generation BEFORE sending, so the request that would cross
     // the ceiling is never paid for. The batch is preserved and drained by the
     // fresh generation the next ingest starts (#3800).
-    if (shouldRecycleConversation(session.conversationHistory, this.conversationMaxChars())) {
+    if (shouldRecycleConversation(session.conversationHistory, this.conversationMaxChars(session))) {
       await recycleObserverConversation(
         session,
         this.sessionManager,
@@ -292,11 +481,14 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     // An oversized payload is condensed by a bounded model pass before the
     // prompt is built, so the observation carries a summary of the whole field
     // rather than a head/tail slice with the middle cut out (#3800).
-    const optimized = await optimizeObservationFields(
-      { toolInput: message.tool_input, toolOutput: message.tool_response },
-      (text, budgetChars, signal) => this.compressField(text, budgetChars, config, signal),
-      { sessionDbId: session.sessionDbId, toolName: message.tool_name },
-    );
+    const compressor = this.fieldCompressor(config, session);
+    const optimized = compressor
+      ? await optimizeObservationFields(
+          { toolInput: message.tool_input, toolOutput: message.tool_response },
+          compressor,
+          { sessionDbId: session.sessionDbId, toolName: message.tool_name },
+        )
+      : { toolInput: message.tool_input, toolOutput: message.tool_response };
 
     const obsPrompt = buildObservationPrompt({
       id: 0,
@@ -311,7 +503,9 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     session.conversationHistory.push({ role: 'user', content: obsPrompt });
     session.lastPromptSentAt = Date.now();
     session.lastGeneratorSource = 'ingest';
-    const obsResponse = await this.query(session.conversationHistory, config);
+    const obsResponse = await this.invokeQuery(
+      session.conversationHistory, config, undefined, { purpose: 'observation', session },
+    );
 
     let tokensUsed = 0;
     if (obsResponse.content) {
@@ -364,14 +558,16 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
     session.lastPromptSentAt = Date.now();
     session.lastGeneratorSource = 'summarize';
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-    const summaryModel = resolveSummaryTierModel(config.model, settings);
+    const summaryModel = this.resolveSummaryModel(config, settings);
     const summaryConfig = summaryModel === config.model ? config : { ...config, model: summaryModel };
     if (summaryConfig !== config) {
       logger.debug('SESSION', 'Tier routing: summary model', {
         sessionId: session.sessionDbId, model: summaryModel
       });
     }
-    const summaryResponse = await this.query(session.conversationHistory, summaryConfig);
+    const summaryResponse = await this.invokeQuery(
+      session.conversationHistory, summaryConfig, undefined, { purpose: 'summary', session },
+    );
 
     let tokensUsed = 0;
     if (summaryResponse.content) {
@@ -395,72 +591,12 @@ export abstract class OpenAICompatibleProvider<TConfig extends { apiKey: string;
   }
 
   /**
-   * Map a classified provider failure onto the abortReason category that keeps
-   * buffered work alive.
-   *
-   * handleGeneratorExit finalizes the session — dropping whatever is buffered —
-   * for every category outside its preserve list. Quota was only ever set by
-   * the two PROACTIVE sites (the pre-request rate-limit guard and the
-   * observer-text heuristic), so a real 429 coming back from the provider left
-   * abortReason null and the session was torn down as if the failure were
-   * fatal (#3700). These conditions clear on their own; the work should still
-   * be there when they do.
+   * The shared error policy, now in session/provider-error-policy.ts so a
+   * provider outside this hierarchy applies the identical rules. Kept as a
+   * protected method because subclasses call it from their own catch sites.
    */
-  private preservingAbortReason(error: ClassifiedProviderError): string | null {
-    switch (error.kind) {
-      case 'quota_exhausted':
-      case 'rate_limit':
-        return `quota:${error.kind}`;
-      // Same shape, same list: handleGeneratorExit already honours 'auth', and
-      // credentials that are fixed by /login are no more fatal than a 429.
-      case 'auth_invalid':
-        return `auth:${error.kind}`;
-      // A timeout or network fault that outlived the retry policy. Finalizing
-      // would turn it into permanent data loss — the same reasoning as the
-      // observer-text transport path in ResponseProcessor (#3752).
-      case 'transient':
-        return `transport:${error.kind}`;
-      default:
-        return null;
-    }
-  }
-
-  protected handleSessionError(error: unknown, session: ActiveSession, _worker?: WorkerRef): never {
-    if (isAbortError(error)) {
-      logger.warn('SDK', `${this.providerName} agent aborted`, { sessionId: session.sessionDbId });
-      throw error;
-    }
-
-    if (isClassified(error)) {
-      // Set BEFORE the rethrow: the .finally() in SessionRoutes reads
-      // session.abortReason to decide whether to finalize the session, so a
-      // reason recorded after unwinding would arrive too late to matter.
-      const preserving = this.preservingAbortReason(error);
-      if (preserving !== null) {
-        session.abortReason = preserving;
-        // Abort as well as label. Without it the controller stays live while
-        // the error unwinds, and the session route books the failure twice —
-        // an observer failure and an error outcome on the way out, then the
-        // aborted outcome at finalization — leaving observer-health marked
-        // failed for a pause that is not a failure. This is what the two
-        // observer-text paths already do for the same conditions.
-        try {
-          session.abortController.abort();
-        } catch {
-          // best-effort; AbortController.abort() should not throw in normal use.
-        }
-        logger.warn('SDK', `${this.providerName} paused on ${error.kind}; preserving buffered work`, {
-          sessionId: session.sessionDbId,
-          kind: error.kind,
-        });
-      }
-
-      // Logged once at SessionRoutes' `Observer failed` line.
-      logger.debug('SDK', `${this.providerName} agent error`, { sessionDbId: session.sessionDbId, kind: error.kind }, error);
-    } else {
-      logger.failure('SDK', `${this.providerName} agent error`, { sessionDbId: session.sessionDbId }, error instanceof Error ? error : new Error(String(error)));
-    }
-    throw error;
+  protected handleSessionError(error: unknown, session: ActiveSession, worker?: WorkerRef): never {
+    return applyProviderErrorPolicy(error, session, this.providerName, worker);
   }
 
 }

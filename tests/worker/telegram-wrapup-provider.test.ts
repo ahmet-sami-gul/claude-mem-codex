@@ -22,6 +22,7 @@ mock.module('../../src/shared/EnvManager.js', () => ({
 const { ClaudeProvider } = await import('../../src/services/worker/ClaudeProvider.js');
 const { GeminiProvider } = await import('../../src/services/worker/GeminiProvider.js');
 const { OpenRouterProvider } = await import('../../src/services/worker/OpenRouterProvider.js');
+const { CodexProvider } = await import('../../src/services/worker/CodexProvider.js');
 
 const input: TelegramWrapupFormatterInput = {
   sessionDbId: 42,
@@ -137,6 +138,49 @@ describe('Telegram wrap-up provider reuse', () => {
       }, expect.any(Error));
     });
   }
+
+  /**
+   * The Codex wrap-up rides the same shared path, with the two differences the
+   * provider exists for: it is handed the call's context (there is no live
+   * session here, so the wrap-up's own id travels on it), and its summary model
+   * is its own — the shared CLAUDE_MEM_TIER_SUMMARY_MODEL pinned above names an
+   * Anthropic model and must never reach a codex invocation.
+   */
+  it('Codex formats the wrap-up with its own summary model and the query context', async () => {
+    const provider = new CodexProvider({} as never, {} as never, {
+      transport: { kind: 'exec' as const, oneShot: async () => { throw new Error('unused'); } },
+    });
+    const config = {
+      model: 'gpt-5.6-luna', summaryModel: 'gpt-5.6-terra', binaryPath: '/mock/codex',
+      effort: 'low', verbosity: 'low', timeoutMs: 180000,
+    };
+    spyOn(provider as any, 'getConfig').mockReturnValue(config);
+    spyOn(provider as any, 'isConfigured').mockReturnValue(true);
+    const query = spyOn(provider as any, 'query').mockResolvedValue({ content: '• Finished the session' });
+
+    await expect(provider.formatTelegramWrapup(input, 'active-observation-model')).resolves.toBe('• Finished the session');
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledWith(
+      [{ role: 'user', content: `${prompt}\n\n${input.summaryText}` }],
+      { ...config, model: 'gpt-5.6-terra', plainText: true },
+      undefined,
+      { purpose: 'telegram-wrapup', sessionDbId: 42 },
+    );
+    expect(config.model).toBe('gpt-5.6-luna');
+  });
+
+  it('Codex does not query while its setup gate is closed', async () => {
+    const provider = new CodexProvider({} as never, {} as never, {
+      transport: { kind: 'exec' as const, oneShot: async () => { throw new Error('unused'); } },
+      startSelfCheck: () => {},
+    });
+    spyOn(provider as any, 'getConfig').mockReturnValue({ model: 'gpt-5.6-luna', summaryModel: '', binaryPath: null, binaryError: 'not found' });
+    const query = spyOn(provider as any, 'query').mockResolvedValue({ content: '• Finished' });
+
+    await expect(provider.formatTelegramWrapup(input)).rejects.toThrow('Codex observer is not ready');
+    expect(query).not.toHaveBeenCalled();
+  });
 
   it('logs and rejects a Claude formatter completion without an assistant text frame', async () => {
     sdkQuery.mockImplementationOnce(() => (async function* () {})());

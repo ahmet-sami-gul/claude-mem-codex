@@ -639,6 +639,29 @@ describe('ExecTransport pre-spawn failures', () => {
     expect(counts).toEqual({ slots: 1, spawns: 1, releases: 1 });
   });
 
+  /**
+   * Plan 3.4's process-registration decision. The wrap-up runs under a live
+   * session's id but is not that session's generator: registered as a plain
+   * 'sdk' record it becomes what getSdkProcessForSession returns, so a
+   * generator exit SIGKILLs the wrap-up (or reaps it INSTEAD of the
+   * generator's own exec). Every other purpose IS the generator's own turn and
+   * must stay reapable.
+   */
+  posixIt('registers only the Telegram wrap-up as an aux process', async () => {
+    const f = fake({});
+    const roles: Array<unknown> = [];
+    _internals.spawnSdkProcess = ((_sessionDbId: number, options: { role?: string }) => {
+      roles.push(options.role);
+      return null;
+    }) as unknown as typeof _internals.spawnSdkProcess;
+
+    for (const purpose of ['telegram_wrapup', 'observation', 'field_compression', 'summary', 'init'] as const) {
+      await expectRejection(transport(f).oneShot('prompt', ctxFor(f, { purpose })));
+    }
+
+    expect(roles).toEqual(['aux', undefined, undefined, undefined, undefined]);
+  });
+
   posixIt('spawnSdkProcess -> null with the real waitForSlot leaves no reservation behind', async () => {
     const f = fake({});
     _internals.spawnSdkProcess = (() => null) as typeof _internals.spawnSdkProcess;

@@ -448,6 +448,14 @@ export class ExecTransport implements CodexTransport {
           command: ctx.binaryPath,
           args,
           env: buildCodexObserverEnv(sanitizeEnv(process.env), this.envSettings()),
+          // Plan 3.4's process-registration decision, option (a). The Telegram
+          // wrap-up runs under a live session's id but is NOT that session's
+          // generator; registered as an ordinary 'sdk' record it would be the
+          // record handleGeneratorExit reaps (matches[0]), so a wrap-up that
+          // overlaps a generator exit would be SIGKILLed after 5 s — or reaped
+          // in place of the generator's own exec, leaving that one running.
+          // 'aux' keeps it out of that lookup; it still holds a slot.
+          ...(ctx.purpose === 'telegram_wrapup' ? { role: 'aux' as const } : {}),
         });
       } catch (error: unknown) {
         // spawn() throws synchronously on invalid arguments; treat like a null return.

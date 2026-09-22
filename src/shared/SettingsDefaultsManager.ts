@@ -36,6 +36,30 @@ export interface SettingsDefaults {
   CLAUDE_MEM_OPENROUTER_BASE_URL: string;
   CLAUDE_MEM_OPENROUTER_SITE_URL: string;
   CLAUDE_MEM_OPENROUTER_APP_NAME: string;
+  // Codex CLI observer (plan section 4). Every one of these is a plain string
+  // here — loadFromFile assigns JSON values without type-checking, so the real
+  // guard is CodexProvider.getConfig(), which parses, clamps and falls back to
+  // the default on anything it cannot use. The cost levers (PATH, HOME,
+  // MAX_EXECS_PER_5H, TRANSPORT, QUOTA_RESERVE_PERCENT, RATE_LIMIT_PROBE_MS,
+  // ALLOW_UNTESTED_VERSION) are file/env only: POST /api/settings is
+  // unauthenticated, so they are deliberately off its write allowlist.
+  CLAUDE_MEM_CODEX_PATH: string;
+  CLAUDE_MEM_CODEX_HOME: string;
+  CLAUDE_MEM_CODEX_MODEL: string;
+  CLAUDE_MEM_CODEX_SUMMARY_MODEL: string;
+  CLAUDE_MEM_CODEX_REASONING_EFFORT: string;
+  CLAUDE_MEM_CODEX_VERBOSITY: string;
+  CLAUDE_MEM_CODEX_TIMEOUT_MS: string;
+  CLAUDE_MEM_CODEX_MAX_CONVERSATION_CHARS: string;
+  CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS: string;
+  CLAUDE_MEM_CODEX_BATCH_MAX_CHARS: string;
+  CLAUDE_MEM_CODEX_BATCH_LINGER_MS: string;
+  CLAUDE_MEM_CODEX_FIELD_COMPRESSION: string;
+  CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: string;
+  CLAUDE_MEM_CODEX_TRANSPORT: string;
+  CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT: string;
+  CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS: string;
+  CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION: string;
   CLAUDE_MEM_DATA_DIR: string;
   CLAUDE_MEM_LOG_LEVEL: string;
   CLAUDE_MEM_PYTHON_VERSION: string;
@@ -190,6 +214,23 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_OPENROUTER_BASE_URL: '',  // #2382/#2590/#2622/#2393 — optional OpenAI-compatible base URL (e.g. https://api.deepseek.com, http://localhost:1234/v1). Empty = default OpenRouter endpoint.
     CLAUDE_MEM_OPENROUTER_SITE_URL: '',  // Optional: for OpenRouter analytics
     CLAUDE_MEM_OPENROUTER_APP_NAME: 'claude-mem',  // App name for OpenRouter analytics
+    CLAUDE_MEM_CODEX_PATH: '',  // Absolute native codex binary; empty = resolve from PATH (file/env only)
+    CLAUDE_MEM_CODEX_HOME: '',  // CODEX_HOME for the observer child; empty = $CODEX_HOME or ~/.codex (file/env only)
+    CLAUDE_MEM_CODEX_MODEL: 'gpt-5.6-luna',  // Widest ChatGPT-plan allowance of the allowlisted models
+    CLAUDE_MEM_CODEX_SUMMARY_MODEL: '',  // Empty = same as CLAUDE_MEM_CODEX_MODEL (never the shared TIER aliases)
+    CLAUDE_MEM_CODEX_REASONING_EFFORT: 'low',  // Passed explicitly: --ignore-user-config drops the user's own setting
+    CLAUDE_MEM_CODEX_VERBOSITY: 'low',  // The only output-length lever codex exposes
+    CLAUDE_MEM_CODEX_TIMEOUT_MS: '180000',  // Per-exec deadline (30000-600000), independent of CLAUDE_MEM_LLM_TIMEOUT_MS
+    CLAUDE_MEM_CODEX_MAX_CONVERSATION_CHARS: '120000',  // Codex-specific recycle budget (40000-400000)
+    CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS: '4',  // Contiguous observations per exec (1-12); batching itself lands in M4
+    CLAUDE_MEM_CODEX_BATCH_MAX_CHARS: '48000',  // New envelope characters per batch (8000-96000)
+    CLAUDE_MEM_CODEX_BATCH_LINGER_MS: '2000',  // Wait for one more event only while the queue is empty (0-30000)
+    CLAUDE_MEM_CODEX_FIELD_COMPRESSION: 'false',  // false = use the prompt's head/tail elision instead of a second exec per field
+    CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '0',  // 0 = no local cap (file/env only)
+    CLAUDE_MEM_CODEX_TRANSPORT: 'exec',  // Phase 1 ships 'exec'; 'exec-resume' / 'app-server' are reserved (file/env only)
+    CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT: '0',  // Share left to interactive Codex (0-50), Phase 2 (file/env only)
+    CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS: '300000',  // Rate-limit probe cache (60000-3600000), Phase 2
+    CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION: 'false',  // Allow an untested codex version; feature + canary checks still run (file/env only)
     CLAUDE_MEM_DATA_DIR: join(homedir(), '.claude-mem'),
     CLAUDE_MEM_LOG_LEVEL: 'INFO',
     CLAUDE_MEM_PYTHON_VERSION: '3.13',
@@ -213,8 +254,8 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_FOLDER_USE_LOCAL_MD: 'false',  // When true, writes to CLAUDE.local.md instead of CLAUDE.md
     CLAUDE_MEM_TRANSCRIPTS_ENABLED: 'true',
     CLAUDE_MEM_TRANSCRIPTS_CONFIG_PATH: join(homedir(), '.claude-mem', 'transcript-watch.json'),
-    CLAUDE_MEM_CODEX_TRANSCRIPT_INGESTION: 'false',
-    CLAUDE_MEM_MAX_CONCURRENT_AGENTS: '2',  // Max concurrent Claude SDK agent subprocesses
+    CLAUDE_MEM_CODEX_TRANSCRIPT_INGESTION: 'false',  // Host integration: ingest Codex CLI transcripts. Unrelated to the CLAUDE_MEM_CODEX_* observer keys above
+    CLAUDE_MEM_MAX_CONCURRENT_AGENTS: '2',  // Max concurrent observer agent subprocesses (Claude SDK and Codex exec share the pool)
     CLAUDE_MEM_OBSERVER_MAX_CONVERSATION_CHARS: '400000',  // Retire an observer conversation past this size and start a fresh generation (#3800)
     CLAUDE_MEM_HOOK_FAIL_LOUD_THRESHOLD: '3',  // Plan 05 Phase 8 — escalate to exit code 2 after N consecutive worker-unreachable hook invocations
     CLAUDE_MEM_EXCLUDED_PROJECTS: '',  // Comma-separated glob patterns for excluded project paths

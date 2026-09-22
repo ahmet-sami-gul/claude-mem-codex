@@ -13,6 +13,7 @@ import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsMana
 import { clearPortCache } from '../../../../shared/worker-utils.js';
 import { snapshotDependencyHealth } from '../../../../shared/dependency-health.js';
 import { parseJsonWithBom, writeJsonFileAtomic } from '../../../../shared/atomic-json.js';
+import { CODEX_MODEL_ALLOWLIST, MODEL_ID_RE } from '../../codex/codex-invocation.js';
 
 const toggleMcpSchema = z.object({
   enabled: z.boolean(),
@@ -120,6 +121,18 @@ export class SettingsRoutes extends BaseRouteHandler {
     // and the Chroma / Telegram / CloudSync keys. POST /api/settings has no
     // authentication, so any page the user visits could set one of its choosing.
     // Keeping them off this list means only the filesystem or the env can set them.
+    //
+    // The same reasoning now covers the Codex COST levers, which are absent for
+    // a sharper reason than secrecy: an unauthenticated local page could
+    // otherwise spend the user's ChatGPT plan. CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H
+    // could be set to 0 (unlimited), CLAUDE_MEM_CODEX_PATH / _HOME could point
+    // the observer at another binary or another login, and _TRANSPORT,
+    // _QUOTA_RESERVE_PERCENT, _RATE_LIMIT_PROBE_MS and _ALLOW_UNTESTED_VERSION
+    // all relax a guard. Those seven are file/env only. What remains writable is
+    // the tuning a viewer legitimately offers — effort, verbosity, the timeout,
+    // the conversation and batch budgets, field compression, and the two model
+    // keys, which validateSettings additionally pins to CODEX_MODEL_ALLOWLIST
+    // (or the value already persisted, so the viewer round-trip still works).
     const settingKeys = [
       'CLAUDE_MEM_MODEL',
       'CLAUDE_MEM_CONTEXT_OBSERVATIONS',
@@ -152,6 +165,16 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_SUMMARY',
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE',
       'CLAUDE_MEM_FOLDER_CLAUDEMD_ENABLED',
+      'CLAUDE_MEM_CODEX_MODEL',
+      'CLAUDE_MEM_CODEX_SUMMARY_MODEL',
+      'CLAUDE_MEM_CODEX_REASONING_EFFORT',
+      'CLAUDE_MEM_CODEX_VERBOSITY',
+      'CLAUDE_MEM_CODEX_TIMEOUT_MS',
+      'CLAUDE_MEM_CODEX_MAX_CONVERSATION_CHARS',
+      'CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS',
+      'CLAUDE_MEM_CODEX_BATCH_MAX_CHARS',
+      'CLAUDE_MEM_CODEX_BATCH_LINGER_MS',
+      'CLAUDE_MEM_CODEX_FIELD_COMPRESSION',
     ];
 
     for (const key of settingKeys) {
@@ -192,11 +215,49 @@ export class SettingsRoutes extends BaseRouteHandler {
   });
 
   private validateSettings(settings: any): { valid: boolean; error?: string } {
+    // The values already on disk (with env overrides applied, i.e. what
+    // dispatch itself reads). Several codex rules accept "unchanged" so the
+    // viewer's round-trip — POST the whole GET body back — keeps working for a
+    // key this route will not actually write.
+    const persisted = this.loadPersistedSettings();
+
     if (settings.CLAUDE_MEM_PROVIDER) {
-    const validProviders = ['claude', 'gemini', 'openrouter'];
+    const validProviders = ['claude', 'gemini', 'openrouter', 'codex'];
     if (!validProviders.includes(settings.CLAUDE_MEM_PROVIDER)) {
-      return { valid: false, error: 'CLAUDE_MEM_PROVIDER must be "claude", "gemini", or "openrouter"' };
+      return { valid: false, error: 'CLAUDE_MEM_PROVIDER must be "claude", "gemini", "openrouter", or "codex"' };
       }
+      // Switching TO codex is file/env only. This endpoint is unauthenticated
+      // and reachable from any page the user has open (middleware.ts allows
+      // every localhost origin), so accepting the switch here would let a web
+      // page redirect memory onto the user's paid ChatGPT plan. Accepting the
+      // value when it is ALREADY the persisted one costs nothing and keeps the
+      // viewer round-trip working for a codex user.
+      if (settings.CLAUDE_MEM_PROVIDER === 'codex' && persisted.CLAUDE_MEM_PROVIDER !== 'codex') {
+        return {
+          valid: false,
+          error: 'CLAUDE_MEM_PROVIDER can only be switched to "codex" in settings.json or the environment, not over the API',
+        };
+      }
+      // ...and symmetrically OFF it. A one-directional gate is a trapdoor: the
+      // same unauthenticated page could POST 'claude' over a persisted 'codex'
+      // and the rule above would then refuse to put it back, permanently
+      // moving observation onto another provider and plan with no way to undo
+      // it from the API. The shipped viewer makes that reachable by accident
+      // too — its provider <select> has no codex option, so a codex install
+      // shows an unmatched value and the first save after touching the
+      // dropdown would flip it. The file owns the codex choice in BOTH
+      // directions.
+      if (persisted.CLAUDE_MEM_PROVIDER === 'codex' && settings.CLAUDE_MEM_PROVIDER !== 'codex') {
+        return {
+          valid: false,
+          error: 'CLAUDE_MEM_PROVIDER can only be switched away from "codex" in settings.json or the environment, not over the API',
+        };
+      }
+    }
+
+    const codexError = this.validateCodexSettings(settings, persisted);
+    if (codexError) {
+      return { valid: false, error: codexError };
     }
 
     if (settings.CLAUDE_MEM_CLAUDE_AUTH_METHOD) {
@@ -326,6 +387,128 @@ export class SettingsRoutes extends BaseRouteHandler {
     }
 
     return { valid: true };
+  }
+
+  /** Effective settings as dispatch reads them; never throws (validation must not 500). */
+  private loadPersistedSettings(): Record<string, string> {
+    try {
+      return SettingsDefaultsManager.loadFromFile(paths.settings()) as unknown as Record<string, string>;
+    } catch (error: unknown) {
+      logger.debug('SETTINGS', 'Could not read persisted settings while validating', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {};
+    }
+  }
+
+  /**
+   * Plan 3.1 validators for the CLAUDE_MEM_CODEX_* keys. Runs over the WHOLE
+   * body, including keys this route will not write, because the viewer posts
+   * back everything GET returned — so each rule must accept the current value.
+   */
+  private validateCodexSettings(settings: any, persisted: Record<string, string>): string | undefined {
+    const present = (key: string): boolean =>
+      settings[key] !== undefined && settings[key] !== null && settings[key] !== '';
+
+    /**
+     * The value in the body is the value already on disk, so this save changes
+     * nothing about it. Every rule below accepts that case, for two reasons:
+     * the viewer posts the WHOLE GET body back, so one out-of-range value in
+     * settings.json would otherwise 400 every save — including saves of
+     * completely unrelated settings — and seven of these keys are file/env
+     * only, so this route could not repair a value it refuses. The runtime is
+     * already the lenient half of this pair: CodexProvider.getConfig warns and
+     * clamps (or falls back), it does not reject.
+     */
+    const unchanged = (key: string): boolean => settings[key] === persisted[key];
+
+    /**
+     * Every codex setting is a STRING. settings.json is hand-editable and this
+     * route is unauthenticated, so a JSON number/boolean/array must be refused
+     * here rather than written verbatim into the file — `Number(value)` alone
+     * accepts all three. (getConfig is hardened against one arriving by some
+     * other route as well, but it degrades to the default there, which is not
+     * what the user asked for.)
+     */
+    const mustBeString = (key: string): string | undefined =>
+      typeof settings[key] === 'string' ? undefined : `${key} must be a string`;
+
+    // Models: over HTTP only an allowlisted id (or the value already
+    // persisted). The file/env path is looser — MODEL_ID_RE — because a new
+    // catalogue entry should not require a claude-mem release; only the
+    // unauthenticated route is pinned to the list.
+    for (const key of ['CLAUDE_MEM_CODEX_MODEL', 'CLAUDE_MEM_CODEX_SUMMARY_MODEL'] as const) {
+      if (!present(key) || unchanged(key)) continue;
+      const value = settings[key];
+      if (typeof value !== 'string') {
+        return `${key} must be a string`;
+      }
+      if (!(CODEX_MODEL_ALLOWLIST as readonly string[]).includes(value)) {
+        return `${key} must be one of: ${CODEX_MODEL_ALLOWLIST.join(', ')} (other ids can be set in settings.json, where ${MODEL_ID_RE.source} applies)`;
+      }
+    }
+
+    for (const key of ['CLAUDE_MEM_CODEX_REASONING_EFFORT', 'CLAUDE_MEM_CODEX_VERBOSITY'] as const) {
+      if (!present(key) || unchanged(key)) continue;
+      if (!['low', 'medium', 'high'].includes(settings[key])) {
+        return `${key} must be "low", "medium", or "high"`;
+      }
+    }
+
+    const ranges: Array<[string, number, number]> = [
+      ['CLAUDE_MEM_CODEX_TIMEOUT_MS', 30000, 600000],
+      ['CLAUDE_MEM_CODEX_MAX_CONVERSATION_CHARS', 40000, 400000],
+      ['CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS', 1, 12],
+      ['CLAUDE_MEM_CODEX_BATCH_MAX_CHARS', 8000, 96000],
+      ['CLAUDE_MEM_CODEX_BATCH_LINGER_MS', 0, 30000],
+      ['CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT', 0, 50],
+      ['CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS', 60000, 3600000],
+    ];
+    for (const [key, min, max] of ranges) {
+      if (!present(key) || unchanged(key)) continue;
+      const typeError = mustBeString(key);
+      if (typeError) return typeError;
+      const value = Number(settings[key]);
+      if (!Number.isInteger(value) || value < min || value > max) {
+        return `${key} must be an integer between ${min} and ${max}`;
+      }
+    }
+
+    // 0 means "no local cap", so this one has no upper bound.
+    if (present('CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H') && !unchanged('CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H')) {
+      const typeError = mustBeString('CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H');
+      if (typeError) return typeError;
+      const value = Number(settings.CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H);
+      if (!Number.isInteger(value) || value < 0) {
+        return 'CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H must be an integer of 0 or more (0 = no local cap)';
+      }
+    }
+
+    for (const key of ['CLAUDE_MEM_CODEX_FIELD_COMPRESSION', 'CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION'] as const) {
+      if (!present(key) || unchanged(key)) continue;
+      if (!['true', 'false'].includes(settings[key])) {
+        return `${key} must be "true" or "false"`;
+      }
+    }
+
+    if (
+      present('CLAUDE_MEM_CODEX_TRANSPORT')
+      && !unchanged('CLAUDE_MEM_CODEX_TRANSPORT')
+      && settings.CLAUDE_MEM_CODEX_TRANSPORT !== 'exec'
+    ) {
+      return 'CLAUDE_MEM_CODEX_TRANSPORT must be "exec" (exec-resume and app-server are reserved for a later phase)';
+    }
+
+    // Both feed spawn/auth identity (the binary that runs, and which login it
+    // reads), so a type-confused payload must not reach path handling.
+    for (const key of ['CLAUDE_MEM_CODEX_PATH', 'CLAUDE_MEM_CODEX_HOME'] as const) {
+      if (settings[key] === undefined || settings[key] === '') continue;
+      if (typeof settings[key] !== 'string' || !settings[key].trim() || settings[key].includes('\0')) {
+        return `${key} must be a non-empty path string without NUL bytes, or "" to use the default`;
+      }
+    }
+
+    return undefined;
   }
 
   private isMcpEnabled(): boolean {

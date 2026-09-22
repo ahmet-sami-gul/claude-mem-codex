@@ -45,7 +45,13 @@ import {
   recordObserverQuotaCooldown,
 } from './observer-health.js';
 
-export type QuotaProvider = 'claude' | 'gemini' | 'openrouter' | 'cmem-gateway';
+/**
+ * 'codex' is listed because `session.currentProvider` is an ObserverProvider
+ * and ResponseProcessor clears the breaker for whatever produced a successful
+ * store. Nothing arms a codex window yet (that is the codex quota circuit,
+ * still to come); clearing one that was never armed is a no-op.
+ */
+export type QuotaProvider = 'claude' | 'gemini' | 'openrouter' | 'codex' | 'cmem-gateway';
 
 export const QUOTA_COOLDOWN_FILENAME = 'quota-cooldown.json';
 

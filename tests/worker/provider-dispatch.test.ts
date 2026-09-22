@@ -7,6 +7,7 @@ import {
   CMEM_FALLBACK_RETRY_MS,
   getSelectedProvider,
   recordCmemFallbackIfEligible,
+  selectProviderForGenerator,
   shouldUseCmemFallback,
 } from '../../src/services/worker/provider-dispatch.js';
 import { classifyOpenRouterError } from '../../src/services/worker/OpenRouterProvider.js';
@@ -107,6 +108,39 @@ describe('provider-dispatch', () => {
       process.env.CLAUDE_MEM_GEMINI_API_KEY = '';
       process.env.CLAUDE_MEM_OPENROUTER_API_KEY = '';
       expect(getSelectedProvider()).toBe('claude');
+    });
+  });
+
+  /**
+   * Codex is checked FIRST and has no availability gate. A Codex install that
+   * is broken must surface as the provider's own setup_required error, not as
+   * memory quietly running on — and billing — a different provider.
+   */
+  describe('codex selection', () => {
+    it('returns codex whenever it is selected, before anything else is considered', () => {
+      // Everything the other branches look at is present and pointing
+      // elsewhere; none of it may win.
+      pinOpenRouterEnv({ CLAUDE_MEM_PRO_FALLBACK_AT: new Date().toISOString() });
+      process.env.CLAUDE_MEM_GEMINI_API_KEY = 'gemini-key';
+      process.env.CLAUDE_MEM_PROVIDER = 'codex';
+
+      expect(getSelectedProvider()).toBe('codex');
+      expect(selectProviderForGenerator()).toEqual({ provider: 'codex', gatewayProbeClaimId: null });
+    });
+
+    it('never falls back to claude, however unusable the codex setup is', () => {
+      // No binary, no login, nothing verified: dispatch still answers codex.
+      process.env.CLAUDE_MEM_PROVIDER = 'codex';
+      process.env.CLAUDE_MEM_OPENROUTER_API_KEY = '';
+      process.env.CLAUDE_MEM_GEMINI_API_KEY = '';
+
+      expect(getSelectedProvider()).toBe('codex');
+    });
+
+    it('leaves the other providers alone when codex is not selected', () => {
+      pinOpenRouterEnv();
+      expect(getSelectedProvider()).toBe('openrouter');
+      expect(selectProviderForGenerator().provider).toBe('openrouter');
     });
   });
 

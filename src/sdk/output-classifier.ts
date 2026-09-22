@@ -117,7 +117,14 @@ export function isContextOverflowObserverOutput(raw: unknown): boolean {
     /\bcontext (?:window|length|limit)\b.{0,30}\b(?:exceeded|too (?:long|large)|overflow)\b/.test(text) ||
     /\bexceeds?\b.{0,30}\bcontext (?:window|length|limit)\b/.test(text) ||
     /\b(?:too many|exceeds the maximum number of) (?:input )?tokens\b/.test(text) ||
-    /\breduce the length of the messages\b/.test(text)
+    /\breduce the length of the messages\b/.test(text) ||
+    // The Codex runner's own overflow wording (CODEX_CONTEXT_OVERFLOW_CONTENT).
+    // It is returned AS CONTENT so this recycle branch runs; without a pattern
+    // for it the prose is appended to the conversation instead, making the next
+    // request strictly larger than the one that just overflowed. Apostrophe
+    // tolerant: the text is lowercased and whitespace-collapsed above, but the
+    // typographic apostrophe survives that.
+    /\bran out of room in the model['’]?s context window\b/.test(text)
   );
 }
 

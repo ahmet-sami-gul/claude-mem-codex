@@ -10,7 +10,9 @@ import { DatabaseManager } from '../../DatabaseManager.js';
 import { ClaudeProvider } from '../../ClaudeProvider.js';
 import { GeminiProvider } from '../../GeminiProvider.js';
 import { OpenRouterProvider } from '../../OpenRouterProvider.js';
+import { CodexProvider } from '../../CodexProvider.js';
 import { getSelectedProvider, recordCmemFallbackIfEligible, releaseCmemGatewayProbe, selectProviderForGenerator } from '../../provider-dispatch.js';
+import type { ObserverProvider } from '../../../worker-types.js';
 import type { WorkerService } from '../../../worker-service.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { SessionEventBroadcaster } from '../../events/SessionEventBroadcaster.js';
@@ -40,7 +42,7 @@ import {
   getQuotaCooldown,
   QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS,
 } from '../../../../shared/quota-cooldown.js';
-import { isClassified, describeProviderError } from '../../provider-errors.js';
+import { ClassifiedProviderError, isClassified, describeProviderError } from '../../provider-errors.js';
 import { classifyClaudeError } from '../../ClaudeProvider.js';
 import { isSessionParkedForSlot } from '../../../../supervisor/process-registry.js';
 import type { TelegramWrapupFormatterInput } from '../../../integrations/TelegramWrapupNotifier.js';
@@ -91,6 +93,14 @@ export class SessionRoutes extends BaseRouteHandler {
     private eventBroadcaster: SessionEventBroadcaster,
     private workerService: WorkerService,
     private completionHandler: SessionCompletionHandler,
+    /**
+     * Last and optional on purpose: the seven positional constructions in the
+     * test suite keep compiling, and a worker built before the Codex provider
+     * existed simply has no codex agent to hand over. A dispatch that selects
+     * codex without one raises setup_required rather than silently running the
+     * session on Claude.
+     */
+    private codexAgent?: CodexProvider,
   ) {
     super();
     this.sessionManager.setTelegramWrapupFormatter?.(this.formatTelegramWrapup);
@@ -109,6 +119,28 @@ export class SessionRoutes extends BaseRouteHandler {
           return await this.geminiAgent.formatTelegramWrapup(input, activeModelId);
         case 'openrouter':
           return await this.openRouterAgent.formatTelegramWrapup(input, activeModelId);
+        // Without this case a codex user's wrap-up would be formatted by
+        // Claude — a different provider, a different plan, and a model the
+        // session never used.
+        //
+        // Process-registration decision (plan 3.4), option (a): a Codex
+        // wrap-up exec spawns under the LIVE session's id (it has to — jail
+        // directory, audit attribution), but it is not the session's
+        // generator. Registered as a plain 'sdk' record it would be
+        // indistinguishable from the generator's own exec, and
+        // handleGeneratorExit -> getSdkProcessForSession returns matches[0]
+        // and SIGKILLs it after 5 s: a wrap-up that overlaps a generator exit
+        // (ResponseProcessor fires it right after a summary, while the
+        // generator is still running) would either be killed mid-flight or be
+        // reaped INSTEAD of the generator's real process, leaving that one
+        // unreaped. So ExecTransport registers an off-band turn with
+        // `role: 'aux'`, which getSdkProcessForSession skips and the slot
+        // accounting still counts — the wrap-up occupies a slot like any other
+        // exec, it just is not mistaken for the generator. Option (b) — defer
+        // the wrap-up until no generator is live — was rejected: it would
+        // delay or drop a user-visible message to fix a bookkeeping problem.
+        case 'codex':
+          return await this.agentFor('codex').agent.formatTelegramWrapup(input, activeModelId);
         default:
           return await this.sdkAgent.formatTelegramWrapup(input, activeModelId);
       }
@@ -282,10 +314,23 @@ export class SessionRoutes extends BaseRouteHandler {
   private async admitAndStartGenerator(
     session: NonNullable<ReturnType<typeof this.sessionManager.getSession>>,
     sessionDbId: number,
-    selectedProvider: 'claude' | 'gemini' | 'openrouter',
+    selectedProvider: ObserverProvider,
     source: string,
     gatewayProbeClaimId: number | null,
   ): Promise<void> {
+    // Resolved BEFORE the admission below: a provider with no agent cannot
+    // start, and claiming the quota probe first would leave that claim
+    // outstanding when this throws (nothing releases it until a generator's
+    // .finally() runs, and there is no generator). startGeneratorWithProvider
+    // resolves it again for use — the map lookup is free, an orphaned claim is
+    // not.
+    try {
+      this.agentFor(selectedProvider);
+    } catch (error: unknown) {
+      releaseCmemGatewayProbe(gatewayProbeClaimId);
+      throw error;
+    }
+
     // Quota breaker (#3634). Without this, an exhausted allowance produced one
     // doomed request per captured tool call for the rest of the billing cycle:
     // the generator exits on the refusal, and the next observation starts a
@@ -320,9 +365,42 @@ export class SessionRoutes extends BaseRouteHandler {
     );
   }
 
+  /**
+   * provider -> the agent that serves it and the label used in logs. A map
+   * rather than nested ternaries: with four providers the ternary chain's
+   * "everything else is Claude" tail silently absorbs a provider whose agent is
+   * missing, which for codex would mean running the user's session on a
+   * different plan than they selected. An absent agent is a setup problem, and
+   * says so.
+   */
+  private agentFor(provider: ObserverProvider): {
+    agent: ClaudeProvider | GeminiProvider | OpenRouterProvider | CodexProvider;
+    name: string;
+  } {
+    const entry = {
+      claude: { agent: this.sdkAgent as ClaudeProvider | undefined, name: 'Claude SDK' },
+      gemini: { agent: this.geminiAgent as GeminiProvider | undefined, name: 'Gemini' },
+      openrouter: { agent: this.openRouterAgent as OpenRouterProvider | undefined, name: 'OpenRouter' },
+      codex: { agent: this.codexAgent, name: 'Codex' },
+    }[provider];
+
+    if (!entry?.agent) {
+      throw new ClassifiedProviderError(
+        `The ${provider} observer is selected but this worker has no ${provider} agent`,
+        {
+          kind: 'setup_required',
+          cause: new Error(`missing ${provider} agent`),
+          code: 'observer_agent_missing',
+          action: 'Restart the claude-mem worker so it builds the selected provider, or change CLAUDE_MEM_PROVIDER in settings.json.',
+        },
+      );
+    }
+    return { agent: entry.agent, name: entry.name };
+  }
+
   private async startGeneratorWithProvider(
     session: ReturnType<typeof this.sessionManager.getSession>,
-    provider: 'claude' | 'gemini' | 'openrouter',
+    provider: ObserverProvider,
     source: string,
     /** The quota probe this run claimed, or null when it was admitted without one. */
     quotaProbeClaimId: number | null,
@@ -338,8 +416,7 @@ export class SessionRoutes extends BaseRouteHandler {
       session.abortController = new AbortController();
     }
 
-    const agent = provider === 'openrouter' ? this.openRouterAgent : (provider === 'gemini' ? this.geminiAgent : this.sdkAgent);
-    const agentName = provider === 'openrouter' ? 'OpenRouter' : (provider === 'gemini' ? 'Gemini' : 'Claude SDK');
+    const { agent, name: agentName } = this.agentFor(provider);
 
     const actualQueueDepth = this.sessionManager.getMessageBuffer().getPendingCount(session.sessionDbId);
 
@@ -350,6 +427,14 @@ export class SessionRoutes extends BaseRouteHandler {
     });
 
     session.currentProvider = provider;
+    // A new run owns the field: `lastProviderError` documents "the classified
+    // failure that ended the LATEST generator run", and nothing else clears it
+    // (handleGeneratorExit nulls generatorPromise and currentProvider, not
+    // this). Without the reset a session that failed once on quota and then ran
+    // healthily for hours would keep reporting that quota failure to every
+    // reader — status, observer health, a provider's quota circuit — which
+    // would act on a condition that cleared long ago.
+    session.lastProviderError = null;
     session.lastGeneratorActivity = Date.now();
     // Providers refine this per-prompt ('init'|'ingest'|'summarize'); this is
     // the fallback when a generator dies before dispatching its first prompt.
@@ -368,12 +453,28 @@ export class SessionRoutes extends BaseRouteHandler {
         }
 
         const errorMsg = error instanceof Error ? error.message : String(error);
-        if (provider === 'claude' && isClassified(error) && error.kind === 'setup_required') {
+        // Provider-agnostic on purpose. `setup_required` means the provider was
+        // never asked anything — the observer is not installed, not logged in,
+        // or not yet verified — so nothing was claimed, nothing failed, and
+        // there is nothing to book against observer health. Finalizing here
+        // would be worse than useless: preservingAbortReason has no
+        // setup_required case, so handleGeneratorExit runs with abortCategory
+        // '' and disposes the session's in-RAM buffer, throwing away the very
+        // observations the user captured while their setup was incomplete. The
+        // codex readiness gate (binary + lockdown self-check) is exactly this
+        // shape and hits it on the first ingest after every worker start, so
+        // the gate must skip finalization for every provider, not just Claude.
+        // Gemini/OpenRouter are unaffected either way: their readiness errors
+        // are plain, unclassified Errors.
+        if (isClassified(error) && error.kind === 'setup_required') {
           skipGeneratorExitFinalization = true;
-          recordClaudeCliSetupRequired(error.message);
-          logger.warn('SESSION', 'Claude generator start requires setup; future Claude starts will be skipped until repaired', {
+          if (provider === 'claude') {
+            recordClaudeCliSetupRequired(error.message);
+          }
+          logger.warn('SESSION', 'Generator start requires setup; the buffered work is preserved', {
             sessionId: session.sessionDbId,
             provider,
+            ...(error.code ? { code: error.code } : {}),
             error: error.message,
           });
           return;

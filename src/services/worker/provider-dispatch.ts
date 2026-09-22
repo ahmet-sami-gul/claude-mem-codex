@@ -2,7 +2,12 @@
  * The one provider-dispatch rule, shared by SessionRoutes (generator start)
  * and worker-service (getAiStatus) — previously duplicated in both.
  *
- * Semantics: openrouter wins when selected AND a key exists; else gemini when
+ * Semantics: codex wins whenever it is SELECTED — there is no availability
+ * gate beside it and it never falls through, because a Codex setup problem has
+ * to surface as a setup_required error the user can fix, not as memory quietly
+ * running on (and billing) another provider. The check is settings-only: it
+ * runs on every ingest, /summarize and /init, so it must not spawn anything.
+ * Otherwise openrouter wins when selected AND a key exists; else gemini when
  * selected AND a key exists; else claude (silent fall-through, unchanged).
  *
  * Trial-expiry fallback (plan 2026-08-26 Phase 6): when the selected
@@ -18,10 +23,19 @@ import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js
 import { paths } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
 import { isCmemGatewayUrl, writeProFallbackAt } from '../../shared/cmem-gateway.js';
+import { isCodexSelected } from './CodexProvider.js';
 import { isGeminiAvailable, isGeminiSelected } from './GeminiProvider.js';
 import { isOpenRouterAvailable, isOpenRouterSelected } from './OpenRouterProvider.js';
 import type { ClassifiedProviderError } from './provider-errors.js';
+import type { ObserverProvider } from '../worker-types.js';
 import { releaseQuotaProbe, tryAdmitQuotaProbe } from '../../shared/quota-cooldown.js';
+
+/**
+ * The observer providers dispatch chooses between. Declared in worker-types
+ * (the leaf this module's own imports already depend on) and re-exported here
+ * so `ObserverProvider` means the same union from either import path.
+ */
+export type { ObserverProvider };
 
 /** Retry a fallen-back gateway occasionally so a later subscription recovers. */
 export const CMEM_FALLBACK_RETRY_MS = 15 * 60_000;
@@ -44,7 +58,7 @@ export function shouldUseCmemFallback(
  * handed back to `releaseCmemGatewayProbe` when that run ends.
  */
 export interface ProviderSelection {
-  provider: 'claude' | 'gemini' | 'openrouter';
+  provider: ObserverProvider;
   gatewayProbeClaimId: number | null;
 }
 
@@ -53,7 +67,11 @@ export interface ProviderSelection {
  * is safe to call from anywhere — but a caller about to actually SEND must use
  * `selectProviderForGenerator` instead, or it becomes part of the herd.
  */
-export function getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' {
+export function getSelectedProvider(): ObserverProvider {
+  // First, and with no availability check: see the header.
+  if (isCodexSelected()) {
+    return 'codex';
+  }
   if (isOpenRouterSelected() && isOpenRouterAvailable()) {
     const settings = SettingsDefaultsManager.loadFromFile(paths.settings());
     if (
@@ -88,6 +106,11 @@ export function getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' {
  * breaker is armed.
  */
 export function selectProviderForGenerator(): ProviderSelection {
+  // First, and with no availability check: see the header. Codex takes no
+  // gateway re-probe claim — that machinery belongs to the cmem gateway.
+  if (isCodexSelected()) {
+    return { provider: 'codex', gatewayProbeClaimId: null };
+  }
   if (isOpenRouterSelected() && isOpenRouterAvailable()) {
     const settings = SettingsDefaultsManager.loadFromFile(paths.settings());
     if (settings.CLAUDE_MEM_PRO_FALLBACK_AT && isCmemGatewayUrl(settings.CLAUDE_MEM_OPENROUTER_BASE_URL)) {

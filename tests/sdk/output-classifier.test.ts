@@ -7,6 +7,7 @@ import {
   isTransportFailureObserverOutput,
   previewOutput,
 } from '../../src/sdk/output-classifier.js';
+import { CODEX_CONTEXT_OVERFLOW_CONTENT } from '../../src/services/worker/codex/codex-errors.js';
 
 describe('classifyObserverOutput (plan-11 #2485)', () => {
   it('classifies valid <observation> XML as xml', () => {
@@ -127,6 +128,21 @@ describe('isContextOverflowObserverOutput (#3800)', () => {
   it('recognises the exact wording reported in the field', () => {
     // The reporter logged this verbatim, 2,264 times in one day.
     expect(isContextOverflowObserverOutput('Prompt is too long')).toBe(true);
+  });
+
+  /**
+   * The Codex runner returns this string AS CONTENT precisely so the recycle
+   * branch runs (ResponseProcessor classifies rejection prose before it grows
+   * the conversation). The constant and this pattern must not drift apart: if
+   * the wording stops matching, the overflow prose is appended to the
+   * conversation instead, the next request is strictly larger than the one
+   * that just overflowed, and the batch is confirmed and dropped rather than
+   * recycled.
+   */
+  it('recognises the Codex runner\'s own overflow wording', () => {
+    expect(isContextOverflowObserverOutput(CODEX_CONTEXT_OVERFLOW_CONTENT)).toBe(true);
+    // Whatever apostrophe the wording ends up using.
+    expect(isContextOverflowObserverOutput('Codex ran out of room in the model\u2019s context window.')).toBe(true);
   });
 
   it('recognises other provider phrasings of a context-window overflow', () => {
