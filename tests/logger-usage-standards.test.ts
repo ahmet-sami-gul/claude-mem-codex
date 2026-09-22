@@ -45,6 +45,12 @@ const EXCLUDED_PATTERNS = [
   /build\/hook-shell-template\.ts$/,  // Pure build-time shell-string generator (no runtime/observability surface); drift is enforced by build-hooks.js + plugin-distribution.test.ts
   /worker\/model-aliases\.ts$/,  // Pure $TIER alias resolver (#2289); side-effect-free passthrough, logging happens at the request-time call site
   /worker\/TimelineService\.ts$/,  // Pure filterByDepth helper after dead-code removal; no side effects (mirrors FallbackErrorHandler)
+  /worker\/codex\/codex-transport\.ts$/,  // Pure CodexTransport / TurnResult type contract; no runtime behaviour to instrument
+  /worker\/codex\/codex-invocation\.ts$/,  // Pure closed argv builder (lockdown L0); the runner and self-check log at the spawn site with session context
+  /worker\/codex\/codex-env\.ts$/,  // Pure env allowlist builder; logging happens at the spawn site (mirrors output-classifier)
+  /worker\/codex\/codex-jsonl\.ts$/,  // Pure tolerant JSONL parser; the runner logs counters and SECURITY tool attempts with session context
+  /worker\/codex\/codex-prompt\.ts$/,  // Pure deterministic prompt renderer; logging happens at the CodexProvider call site
+  /worker\/codex\/codex-errors\.ts$/,  // Pure failure classification table (also matches the generic errors.ts exemption); the runner and provider log the classified outcome
 ];
 
 const HIGH_PRIORITY_PATTERNS = [

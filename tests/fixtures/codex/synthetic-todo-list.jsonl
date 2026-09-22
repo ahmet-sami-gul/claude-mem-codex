@@ -1,0 +1,7 @@
+{"type":"_fixture.note","note":"SYNTHETIC placeholder: event shapes follow upstream codex-rs exec JSONL and the Phase 0 success capture; this failure/edge stream was NOT captured from a real codex run. Replace with a real capture when one is available."}
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000017"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"todo_list","items":[{"text":"Summarize the observed tool call","completed":false}]}}
+{"type":"item.completed","item":{"id":"item_0","type":"todo_list","items":[{"text":"Summarize the observed tool call","completed":true}]}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"<ok/>"}}
+{"type":"turn.completed","usage":{"input_tokens":5600,"cached_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}

@@ -25,12 +25,23 @@ const MAX_INPUT_BYTES = 4096;
 
 export interface ObserverToolAttempt {
   source: 'Observer' | 'KnowledgeAgent';
+  /**
+   * Which observer backend produced the attempt. Omitted by the Claude SDK
+   * path (entries stay byte-identical to before); the codex runner sets
+   * 'codex' so its lockdown trail is distinguishable in the shared log.
+   */
+  provider?: 'claude' | 'codex';
   sessionDbId?: number;
   contentSessionId?: string;
   project?: string;
   tool_name: string;
   tool_input: unknown;
-  result: 'allowed' | 'denied' | 'error';
+  /**
+   * 'observed' is audit-only: the codex runner records `todo_list`
+   * (update_plan) items this way because exec cannot remove that tool and the
+   * process is deliberately NOT killed for it (plan 5, L4).
+   */
+  result: 'allowed' | 'denied' | 'error' | 'observed';
   error_message?: string;
 }
 
@@ -75,6 +86,7 @@ function writeAuditEntry(attempt: ObserverToolAttempt): void {
   const entry = {
     ts: new Date().toISOString(),
     source: attempt.source,
+    ...(attempt.provider ? { provider: attempt.provider } : {}),
     sessionDbId: attempt.sessionDbId ?? null,
     contentSessionId: attempt.contentSessionId ?? null,
     project: attempt.project ?? null,

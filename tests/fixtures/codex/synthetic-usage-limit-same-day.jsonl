@@ -1,0 +1,5 @@
+{"type":"_fixture.note","note":"SYNTHETIC placeholder: event shapes follow upstream codex-rs exec JSONL and the Phase 0 success capture; this failure/edge stream was NOT captured from a real codex run. Replace with a real capture when one is available."}
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000012"}
+{"type":"turn.started"}
+{"type":"error","message":"You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:45 PM."}
+{"type":"turn.failed","error":{"message":"You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:45 PM."}}

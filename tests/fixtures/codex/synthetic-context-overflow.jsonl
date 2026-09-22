@@ -1,0 +1,4 @@
+{"type":"_fixture.note","note":"SYNTHETIC placeholder: event shapes follow upstream codex-rs exec JSONL and the Phase 0 success capture; this failure/edge stream was NOT captured from a real codex run. Replace with a real capture when one is available."}
+{"type":"thread.started","thread_id":"00000000-0000-4000-8000-000000000015"}
+{"type":"turn.started"}
+{"type":"turn.failed","error":{"message":"Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."}}
