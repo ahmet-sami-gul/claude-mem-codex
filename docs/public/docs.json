@@ -38,6 +38,7 @@
           "usage/getting-started",
           "usage/openrouter-provider",
           "usage/gemini-provider",
+          "usage/codex-provider",
           "usage/search-tools",
           "usage/knowledge-agents",
           "usage/claude-desktop",

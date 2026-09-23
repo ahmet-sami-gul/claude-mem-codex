@@ -21,7 +21,15 @@ export function App() {
   const [paginatedPrompts, setPaginatedPrompts] = useState<UserPrompt[]>([]);
 
   const { observations, summaries, prompts, projects, isProcessing, queueDepth } = useSSE();
-  const { settings, saveSettings, isSaving, saveStatus } = useSettings();
+  const {
+    settings,
+    saveSettings,
+    isSaving,
+    saveStatus,
+    reload: reloadSettings,
+    isLoading: settingsLoading,
+    loadError: settingsLoadError,
+  } = useSettings();
   const { preference, setThemePreference } = useTheme();
   const pagination = usePagination(currentFilter);
 
@@ -125,6 +133,9 @@ export function App() {
         isOpen={contextPreviewOpen}
         onClose={toggleContextPreview}
         settings={settings}
+        onReload={reloadSettings}
+        settingsLoading={settingsLoading}
+        settingsLoadError={settingsLoadError}
         onSave={saveSettings}
         isSaving={isSaving}
         saveStatus={saveStatus}

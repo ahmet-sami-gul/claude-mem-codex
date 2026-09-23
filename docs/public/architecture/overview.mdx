@@ -10,7 +10,7 @@ description: "System components and data flow in Claude-Mem"
 Claude-Mem operates as a Claude Code plugin with the following core components:
 
 1. **Plugin Hooks** - Lifecycle events (Setup version-check + 5 lifecycle hooks: SessionStart, UserPromptSubmit, PreToolUse for `Read`, PostToolUse, Stop)
-2. **Worker Service** - Express HTTP API on a per-user port; processes observations via the Claude Agent SDK (or Gemini / OpenRouter)
+2. **Worker Service** - Express HTTP API on a per-user port; processes observations via the Claude Agent SDK (or Gemini / OpenRouter / the local Codex CLI)
 3. **Database Layer** - SQLite + FTS5 (and optional Chroma for semantic search)
 4. **Search Tools** - HTTP API + the `mem-search` skill / MCP server for progressive disclosure search
 5. **Viewer UI** - React-based real-time memory stream served by the worker
@@ -26,7 +26,7 @@ Claude-Mem operates as a Claude Code plugin with the following core components:
 | **HTTP Server**        | Express.js 5                              |
 | **Real-time**          | Server-Sent Events (SSE)                  |
 | **UI Framework**       | React + TypeScript                        |
-| **AI SDK**             | @anthropic-ai/claude-agent-sdk (or Gemini / OpenRouter) |
+| **AI SDK**             | @anthropic-ai/claude-agent-sdk (or Gemini / OpenRouter / Codex CLI) |
 | **Build Tool**         | esbuild (bundles TypeScript)              |
 | **Process Manager**    | Bun                                       |
 | **Testing**            | `bun test`                                 |
@@ -158,7 +158,7 @@ See [Plugin Hooks](/architecture/hooks) for detailed hook documentation.
 Express.js HTTP server on a per-user port (default `37700 + (uid % 100)`, override via `CLAUDE_MEM_WORKER_PORT`) with:
 - Search HTTP API endpoints
 - Viewer UI HTTP/SSE endpoints
-- Async observation processing via the Claude Agent SDK (or Gemini / OpenRouter)
+- Async observation processing via the Claude Agent SDK (or Gemini / OpenRouter, or a locked-down `codex exec` per call with the [Codex provider](/usage/codex-provider))
 - Real-time updates via Server-Sent Events
 - Auto-managed by Bun
 

@@ -42,6 +42,7 @@ Headless or already signed in? See [CMEM Pro (manual / headless)](/cmem-pro-head
 - **Gemini API key** — memory runs off-plan on your Gemini key.
 - **Anthropic plan** (`--provider claude`) — memory shares your Claude plan usage. Skips cmem.ai entirely. Prompts for the Claude model used to compress observations (Haiku / Sonnet / Opus).
 - **Host observer (opt-in)** — `--provider host` uses the already-logged-in agent over a local loopback. No API key. See [Grok Bot Integration](/grok-bot).
+- **Codex CLI on your ChatGPT plan (manual)** — not an installer choice. After installing, set `"CLAUDE_MEM_PROVIDER": "codex"` in `~/.claude-mem/settings.json` to run memory on your local Codex CLI, signed in with ChatGPT. It shares your plan's Codex limits with your own Codex use. Re-running `npx claude-mem install` rewrites `CLAUDE_MEM_PROVIDER`, so set it back to `"codex"` in `settings.json` afterwards. See [Codex Provider](/usage/codex-provider).
 
 ### Skipping the Sign-In
 

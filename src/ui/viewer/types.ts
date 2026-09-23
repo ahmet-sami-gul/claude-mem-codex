@@ -80,6 +80,18 @@ export interface Settings {
   CLAUDE_MEM_OPENROUTER_SITE_URL?: string;
   CLAUDE_MEM_OPENROUTER_APP_NAME?: string;
 
+  // Codex CLI observer. The six tuning keys are on the settings route's write
+  // allowlist; CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H is file/env only — the modal
+  // shows it read-only and never posts it (buildSettingsSaveBody in
+  // constants/codex.ts). There is deliberately no field for CLAUDE_MEM_CODEX_PATH.
+  CLAUDE_MEM_CODEX_MODEL?: string;
+  CLAUDE_MEM_CODEX_REASONING_EFFORT?: string;
+  CLAUDE_MEM_CODEX_VERBOSITY?: string;
+  CLAUDE_MEM_CODEX_TIMEOUT_MS?: string;
+  CLAUDE_MEM_CODEX_MAX_CONVERSATION_CHARS?: string;
+  CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS?: string;
+  CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H?: string;
+
   CLAUDE_MEM_CONTEXT_SHOW_READ_TOKENS?: string;
   CLAUDE_MEM_CONTEXT_SHOW_WORK_TOKENS?: string;
   CLAUDE_MEM_CONTEXT_SHOW_SAVINGS_AMOUNT?: string;

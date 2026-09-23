@@ -13,8 +13,8 @@ Settings are managed in `~/.claude-mem/settings.json`. The file is auto-created 
 
 | Setting                       | Default                         | Description                           |
 |-------------------------------|---------------------------------|---------------------------------------|
-| `CLAUDE_MEM_MODEL`            | `claude-haiku-4-5-20251001`     | Claude model used to compress observations (when using the Claude provider) |
-| `CLAUDE_MEM_PROVIDER`         | `claude`                        | AI provider: `claude`, `gemini`, or `openrouter` |
+| `CLAUDE_MEM_MODEL`            | `claude-haiku-4-5-20251001`     | Claude model used to compress observations (only when `CLAUDE_MEM_PROVIDER=claude`) |
+| `CLAUDE_MEM_PROVIDER`         | `claude`                        | AI provider: `claude`, `gemini`, `openrouter`, or `codex`. Switching to or from `codex` is only possible in this file or the environment, not from the viewer |
 | `CLAUDE_MEM_CLAUDE_AUTH_METHOD` | `subscription`                | Claude provider auth mode: `subscription`, `api-key`, or `gateway` |
 | `CLAUDE_MEM_MODE`             | `code`                          | Active mode profile (e.g., `code--es`, `email-investigation`) |
 | `CLAUDE_MEM_CONTEXT_OBSERVATIONS` | `50`                        | Number of observations to inject      |
@@ -44,6 +44,34 @@ See [Gemini Provider](usage/gemini-provider) for detailed configuration and rate
 
 See [OpenRouter Provider](usage/openrouter-provider) for detailed configuration, free model list, and usage guide.
 
+### Codex Provider Settings
+
+`CLAUDE_MEM_PROVIDER=codex` runs the memory observer on your local Codex CLI and your ChatGPT plan. Turn it on in this file, not the viewer, and write every value as a JSON string (`"200"`, not `200`).
+
+| Setting                                      | Default        | Description                           |
+|----------------------------------------------|----------------|---------------------------------------|
+| `CLAUDE_MEM_CODEX_MODEL`                     | `gpt-5.6-luna` | Observer model. The viewer and API accept `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.5`; this file accepts any valid model id |
+| `CLAUDE_MEM_CODEX_SUMMARY_MODEL`             | —              | Model for summaries and Telegram wrap-ups; empty = same as the observer model |
+| `CLAUDE_MEM_CODEX_REASONING_EFFORT`          | `low`          | `low`, `medium` or `high` |
+| `CLAUDE_MEM_CODEX_VERBOSITY`                 | `low`          | `low`, `medium` or `high` |
+| `CLAUDE_MEM_CODEX_TIMEOUT_MS`                | `180000`       | Deadline for one Codex call (30000–600000) |
+| `CLAUDE_MEM_CODEX_MAX_CONVERSATION_CHARS`    | `120000`       | Conversation size before it is recycled (40000–400000) |
+| `CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS`    | `4`            | Tool uses per call (1–12; 1 = no batching) |
+| `CLAUDE_MEM_CODEX_BATCH_MAX_CHARS`           | `48000`        | New characters per batch (8000–96000) |
+| `CLAUDE_MEM_CODEX_BATCH_LINGER_MS`           | `2000`         | Wait for one more tool use while the queue is empty (0–30000) |
+| `CLAUDE_MEM_CODEX_FIELD_COMPRESSION`         | `false`        | `true` spends an extra call per oversized tool field instead of cutting it |
+| `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`          | `0`            | Local cap on Codex calls per sliding 5 hours; `0` = no cap. **File/env only** |
+| `CLAUDE_MEM_CODEX_PATH`                      | —              | Absolute path to the codex binary; empty = search `PATH`. **File/env only** |
+| `CLAUDE_MEM_CODEX_HOME`                      | —              | `CODEX_HOME` (login) for the observer; empty = `$CODEX_HOME` or `~/.codex`. **File/env only** |
+| `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION`    | `false`        | Accept a codex-cli version outside the tested range. **File/env only** |
+| `CLAUDE_MEM_CODEX_TRANSPORT`                 | `exec`         | Only `exec` is implemented. **File/env only** |
+| `CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT`     | `0`            | Reserved; no effect yet (0–50). **File/env only** |
+| `CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS`       | `300000`       | Reserved; no effect yet (60000–3600000). **File/env only** |
+
+"File/env only" settings are never written through the unauthenticated settings API, because each could spend more of your plan or weaken a guard. `CLAUDE_MEM_CODEX_TRANSCRIPT_INGESTION` is unrelated: it belongs to the Codex CLI host integration.
+
+See [Codex Provider](usage/codex-provider) for prerequisites, the lockdown, plan limits and troubleshooting.
+
 ### Claude Gateway Settings
 
 Gateway credentials live in `~/.claude-mem/.env`, not `settings.json`.
@@ -69,7 +97,7 @@ Use [LiteLLM Gateway](configuration/litellm-gateway) when you want `CLAUDE_MEM_P
 
 ## Model Configuration
 
-Configure which Claude model compresses your observations (only applies when `CLAUDE_MEM_PROVIDER=claude`).
+Configure which Claude model compresses your observations. `CLAUDE_MEM_MODEL` only applies when `CLAUDE_MEM_PROVIDER=claude`: Gemini, OpenRouter and Codex each read their own model setting instead (`CLAUDE_MEM_GEMINI_MODEL`, `CLAUDE_MEM_OPENROUTER_MODEL`, `CLAUDE_MEM_CODEX_MODEL`).
 
 ### Available Models
 
@@ -362,7 +390,9 @@ Token economics help you understand the value of cached observations vs. re-read
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| **AI Provider** | Claude | Claude, Gemini, OpenRouter, or Codex CLI. The Codex option is disabled unless `settings.json` (or the worker environment) already selects it, and a Codex install cannot switch away here (see [Codex Provider](usage/codex-provider)) |
 | **Model** | sonnet | AI model for generating observations |
+| **Codex settings** | — | Shown when Codex is the provider: model, reasoning effort, verbosity, conversation budget, batch size, timeout. The 5-hour call cap is shown read-only |
 | **Worker Port** | `37700 + (uid % 100)` | Port for background worker service (override with `CLAUDE_MEM_WORKER_PORT`) |
 | **MCP search server** | true | Enable Model Context Protocol search tools |
 | **Include last summary** | false | Add previous session's summary to context |

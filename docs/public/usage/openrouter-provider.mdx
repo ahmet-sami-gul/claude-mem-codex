@@ -75,7 +75,7 @@ All free models support:
 
 | Setting | Values | Default | Description |
 |---------|--------|---------|-------------|
-| `CLAUDE_MEM_PROVIDER` | `claude`, `gemini`, `openrouter` | `claude` | AI provider for observation extraction |
+| `CLAUDE_MEM_PROVIDER` | `claude`, `gemini`, `openrouter`, `codex` | `claude` | AI provider for observation extraction |
 | `CLAUDE_MEM_OPENROUTER_API_KEY` | string | — | Your OpenRouter API key |
 | `CLAUDE_MEM_OPENROUTER_MODEL` | string or array | `xiaomi/mimo-v2-flash:free` | Model identifier, or a list to fall back through (see [Model fallbacks](#model-fallbacks)) |
 | `CLAUDE_MEM_OPENROUTER_SITE_URL` | string | — | Optional: URL for analytics attribution |
@@ -197,6 +197,8 @@ You can switch between providers at any time:
 2. Change the **AI Provider** dropdown
 3. The next observation will use the new provider
 
+The dropdown cannot switch to or away from **Codex CLI**: that is only possible in `settings.json` (see [Codex Provider](/usage/codex-provider)).
+
 ### Switching via Settings File
 
 ```json
@@ -305,14 +307,14 @@ Content-Type: application/json
 
 ## Comparing Providers
 
-| Feature | Claude (SDK) | Gemini | OpenRouter |
-|---------|-------------|--------|------------|
-| **Plan usage** | Shares your Claude plan | Off-plan (your Gemini key) | Off-plan (your OpenRouter credit or the claude-mem observer) |
-| **Models** | Claude only | Gemini only | 100+ models |
-| **Quality** | Highest | High | Varies by model |
-| **Rate limits** | Based on tier | 5-4000 RPM | Varies by model |
-| **On error** | Throws | Throws | Throws |
-| **Setup** | Automatic | API key required | API key required |
+| Feature | Claude (SDK) | Gemini | OpenRouter | Codex CLI |
+|---------|-------------|--------|------------|-----------|
+| **Plan usage** | Shares your Claude plan | Off-plan (your Gemini key) | Off-plan (your OpenRouter credit or the claude-mem observer) | Shares your ChatGPT plan's Codex limits with your own Codex use |
+| **Models** | Claude only | Gemini only | 100+ models | `gpt-5.6-luna` (default), `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.5` |
+| **Quality** | Highest | High | Varies by model | Good (tested with `gpt-5.6-luna`, effort `low`) |
+| **Rate limits** | Based on tier | 5-4000 RPM | Varies by model | ChatGPT plan's 5-hour and weekly limits, plus an optional local cap |
+| **On error** | Throws | Throws | Throws | Pauses and resumes on its own; never falls back to another provider |
+| **Setup** | Automatic | API key required | API key required | Codex CLI + `codex login` with ChatGPT; enabled in `settings.json` only |
 
 <Tip>
 **Recommendation**: The claude-mem observer (chosen at install) is the easiest way to run memory off-plan. Bringing your own key? Start with the free `xiaomi/mimo-v2-flash:free` model. If you need higher quality or encounter rate limits, switch to a premium model or the Claude provider.
@@ -322,5 +324,6 @@ Content-Type: application/json
 
 - [Configuration](/configuration) - Full settings reference
 - [Gemini Provider](/usage/gemini-provider) - Alternative free provider
+- [Codex Provider](/usage/codex-provider) - Run memory on your ChatGPT plan
 - [Getting Started](/usage/getting-started) - Basic usage guide
 - [Troubleshooting](/troubleshooting) - Common issues
