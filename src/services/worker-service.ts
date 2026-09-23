@@ -21,6 +21,7 @@ import { ChromaSync } from './sync/ChromaSync.js';
 import { openConfiguredSqliteDatabase } from './sqlite/connection.js';
 import { configureSupervisorSignalHandlers, getSupervisor, startSupervisor } from '../supervisor/index.js';
 import { reapOrphanedCodexExecs } from '../supervisor/codex-orphan-reaper.js';
+import { hardenObserverAuditLogFiles } from '../utils/observer-audit.js';
 import { sanitizeEnv } from '../supervisor/env-sanitizer.js';
 
 import { ensureWorkerStarted as ensureWorkerStartedShared, getLastWorkerBootFailure, type WorkerStartResult } from './worker-spawner.js';
@@ -524,6 +525,10 @@ export class WorkerService implements WorkerRef {
     this.detectPreviousShutdown();
 
     await startSupervisor();
+
+    // Old observer audit logs (live and rotated) an earlier version left
+    // world-readable are tightened at boot, not only at the next audit entry.
+    hardenObserverAuditLogFiles();
 
     // Right after the supervisor has loaded the registry, and before this
     // worker can spawn anything.

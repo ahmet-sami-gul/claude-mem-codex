@@ -29,7 +29,10 @@ const MAX_INPUT_BYTES = 4096;
  */
 const AUDIT_LOG_MODE = 0o600;
 
-/** A log created by an earlier version (0644) is tightened once per process. */
+/**
+ * A log created by an earlier version (0644), and any rotated generation it
+ * left behind, is tightened once per process.
+ */
 let modeVerified = false;
 
 export interface ObserverToolAttempt {
@@ -112,22 +115,48 @@ function writeAuditEntry(attempt: ObserverToolAttempt): void {
 
 /**
  * An audit log that already existed before this version was created with the
- * process umask (typically 0644). Bring it down to 0600 on the first write of
- * each process; best-effort, and never on Windows, where POSIX modes do not
- * apply.
+ * process umask (typically 0644), and so were the generations an earlier
+ * version rotated out (`.1`-`.3`) — they hold the same tool payloads, and a
+ * rename keeps the old mode. Bring them all down to 0600 on the first write of
+ * each process; generations rotated from then on inherit 0600 from the live
+ * log. Best-effort, and never on Windows, where POSIX modes do not apply.
  */
 function tightenExistingLogMode(): void {
   if (modeVerified) return;
   modeVerified = true;
   if (process.platform === 'win32') return;
+  tightenFileMode(AUDIT_LOG_PATH);
+  for (let i = 1; i <= KEEP_GENERATIONS; i++) {
+    tightenFileMode(`${AUDIT_LOG_PATH}.${i}`);
+  }
+}
+
+function tightenFileMode(path: string): void {
   try {
-    if ((statSync(AUDIT_LOG_PATH).mode & 0o077) !== 0) {
-      chmodSync(AUDIT_LOG_PATH, AUDIT_LOG_MODE);
+    if (!existsSync(path)) return;
+    if ((statSync(path).mode & 0o077) !== 0) {
+      chmodSync(path, AUDIT_LOG_MODE);
     }
   } catch {
-    // [ANTI-PATTERN IGNORED]: best-effort hardening of a file we just wrote;
+    // [ANTI-PATTERN IGNORED]: best-effort hardening of an existing log file;
     // this util is dependency-free by design (see header), and a failed chmod
-    // must never fail the audit write that already succeeded.
+    // must never fail the audit write that already succeeded, nor stop the
+    // remaining generations from being tightened.
+  }
+}
+
+/**
+ * Run the one-time tightening now instead of at the first write. The worker
+ * calls this at startup: a process can go its whole life without an audit
+ * entry (on the Claude path the SDK has no tools to deny), and old files
+ * would otherwise stay readable until then. Creates nothing and never throws.
+ */
+export function hardenObserverAuditLogFiles(): void {
+  try {
+    tightenExistingLogMode();
+  } catch {
+    // [ANTI-PATTERN IGNORED]: tightenFileMode already swallows per-file
+    // errors; this guard only keeps worker startup safe from the unexpected.
   }
 }
 
