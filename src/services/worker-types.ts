@@ -112,6 +112,15 @@ export interface ActiveSession {
    * the run ends, the same way `gatewayProbeClaimId` is.
    */
   quotaProbeClaimId?: number | null;
+  /**
+   * Generator runs of this session that ended in a row on a `transport` pause
+   * (a timeout or network fault that outlived the retry policy). Drives the
+   * resume scheduler's backoff and, from the third one on, the observer-health
+   * record — a single blip heals on its own and must not raise the banner.
+   * Reset by any exit that is not a transport pause, and by ResponseProcessor
+   * as soon as the provider answers at all.
+   */
+  consecutiveTransportExits?: number;
 }
 
 export interface PendingMessage {

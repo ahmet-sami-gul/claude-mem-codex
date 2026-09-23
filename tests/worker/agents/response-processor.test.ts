@@ -103,6 +103,15 @@ import {
 } from '../../../src/services/worker/agents/ResponseProcessor.js';
 import type { WorkerRef, StorageResult } from '../../../src/services/worker/agents/types.js';
 import type { ActiveSession } from '../../../src/services/worker-types.js';
+import {
+  getQuotaCooldown,
+  recordQuotaExhausted,
+  resetQuotaCooldownsForTesting,
+} from '../../../src/shared/quota-cooldown.js';
+import {
+  onObserverTurnAnswered,
+  type ObserverTurnAnswered,
+} from '../../../src/services/worker/session/observer-turn-signal.js';
 import type { DatabaseManager } from '../../../src/services/worker/DatabaseManager.js';
 import type { SessionManager } from '../../../src/services/worker/SessionManager.js';
 
@@ -822,6 +831,118 @@ describe('ResponseProcessor', () => {
       );
 
       expect(session.consecutiveContextOverflows).toBe(0);
+    });
+
+    it('ends a transport streak as soon as the provider answers at all (M3 resume backoff)', async () => {
+      const valid = createMockSession({ consecutiveTransportExits: 2 });
+      await processAgentResponse(`
+        <observation>
+          <type>discovery</type>
+          <title>Back online</title>
+          <narrative>The provider answered after two transport pauses.</narrative>
+          <facts></facts>
+          <concepts></concepts>
+          <files_read></files_read>
+          <files_modified></files_modified>
+        </observation>
+      `, valid, mockDbManager, mockSessionManager, mockWorker, 100, null, 'TestAgent');
+      expect(valid.consecutiveTransportExits).toBe(0);
+
+      overflowSessionManager();
+      const skipped = createMockSession({ consecutiveTransportExits: 2 });
+      await processAgentResponse(
+        'Skipping — nothing worth recording here.', skipped, mockDbManager,
+        mockSessionManager, mockWorker, 100, null, 'TestAgent'
+      );
+      expect(skipped.consecutiveTransportExits).toBe(0);
+    });
+
+    // M3 (failure-paths): a probe whose batch Codex answered with a skip proved
+    // the allowance is back; leaving the breaker armed made its claim hold
+    // every other session back and fed the rest through one watchdog probe at
+    // a time. Codex only — the other providers keep the pre-M3 rule that only
+    // a completed store clears their breaker (plan question 8).
+    it('a non-empty codex answer clears the codex breaker; other providers and empty turns do not', async () => {
+      resetQuotaCooldownsForTesting();
+      try {
+        recordQuotaExhausted('codex', "You've hit your usage limit", 'quota_exhausted', Date.now() - 60 * 60_000, Date.now() - 1);
+        overflowSessionManager();
+        await processAgentResponse(
+          'Skipping — nothing worth recording here.', createMockSession({ currentProvider: 'codex' }),
+          mockDbManager, mockSessionManager, mockWorker, 100, null, 'Codex'
+        );
+        expect(getQuotaCooldown('codex')).toBeNull();
+
+        recordQuotaExhausted('claude', 'Weekly limit reached', 'seven_day');
+        overflowSessionManager();
+        await processAgentResponse(
+          'Skipping — nothing worth recording here.', createMockSession({ currentProvider: 'claude' }),
+          mockDbManager, mockSessionManager, mockWorker, 100, null, 'TestAgent'
+        );
+        expect(getQuotaCooldown('claude')).not.toBeNull();
+
+        // Codex hands back EMPTY content for a forbidden-tool attempt: that
+        // proves nothing about the allowance or the observer.
+        recordQuotaExhausted('codex', "You've hit your usage limit", 'quota_exhausted');
+        overflowSessionManager();
+        await processAgentResponse(
+          '', createMockSession({ currentProvider: 'codex' }),
+          mockDbManager, mockSessionManager, mockWorker, 100, null, 'Codex'
+        );
+        expect(getQuotaCooldown('codex')).not.toBeNull();
+      } finally {
+        resetQuotaCooldownsForTesting();
+      }
+    });
+
+    it('announces an answered turn only for a real, non-empty answer', async () => {
+      const seen: ObserverTurnAnswered[] = [];
+      const unsubscribe = onObserverTurnAnswered(event => {
+        seen.push(event);
+      });
+      try {
+        // Parsed XML (the store path, with the default mocks).
+        await processAgentResponse(`
+          <observation>
+            <type>discovery</type>
+            <title>Answered</title>
+            <narrative>The model answered.</narrative>
+            <facts></facts>
+            <concepts></concepts>
+            <files_read></files_read>
+            <files_modified></files_modified>
+          </observation>
+        `, createMockSession({ sessionDbId: 8, currentProvider: 'codex' }), mockDbManager, mockSessionManager, mockWorker, 100, null, 'Codex');
+
+        overflowSessionManager();
+        await processAgentResponse(
+          'Skipping — nothing worth recording here.', createMockSession({ sessionDbId: 5, currentProvider: 'codex' }),
+          mockDbManager, mockSessionManager, mockWorker, 100, null, 'Codex'
+        );
+        // Not answers: an empty turn, quota prose, and a context overflow.
+        overflowSessionManager();
+        await processAgentResponse(
+          '', createMockSession({ sessionDbId: 6, currentProvider: 'codex' }),
+          mockDbManager, mockSessionManager, mockWorker, 100, null, 'Codex'
+        );
+        overflowSessionManager();
+        await processAgentResponse(
+          "You've hit your usage limit. Try again later.", createMockSession({ sessionDbId: 7, currentProvider: 'codex' }),
+          mockDbManager, mockSessionManager, mockWorker, 100, null, 'Codex'
+        );
+        overflowSessionManager();
+        await processAgentResponse(
+          'Prompt is too long', createMockSession({ sessionDbId: 9, currentProvider: 'codex' }),
+          mockDbManager, mockSessionManager, mockWorker, 100, null, 'Codex'
+        );
+
+        expect(seen).toEqual([
+          { sessionDbId: 8, provider: 'codex' },
+          { sessionDbId: 5, provider: 'codex' },
+        ]);
+      } finally {
+        unsubscribe();
+      }
     });
 
     it('still treats ordinary prose as a benign skip, not an overflow', async () => {

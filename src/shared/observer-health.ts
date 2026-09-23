@@ -53,6 +53,43 @@ export interface ObserverHealthState {
    */
   lastErrorKind?: string | null;
   /**
+   * How many consecutive failures raise the banner for the CURRENT failure,
+   * when its recorder decided the default (OBSERVER_UNHEALTHY_FAILURE_THRESHOLD)
+   * cannot apply. Null means the default.
+   *
+   * The default assumes the observer keeps trying, so a real outage piles up
+   * three failures quickly. That assumption breaks for a Codex setup or login
+   * problem: the route gate stops every further attempt after the first one,
+   * so the count would sit at 1 forever and the user would never be told
+   * (plan 3.6 (b)). Only ever LOWERS the threshold.
+   */
+  lastErrorAlertThreshold?: number | null;
+  /**
+   * The worker has stopped attempting and is holding captured observations
+   * until the user fixes something only they can fix (install the CLI, log in).
+   * The banner then says exactly that and does NOT offer a restart: a restart
+   * fixes nothing here and discards the held observations.
+   */
+  lastErrorAwaitingUserFix?: boolean | null;
+  /**
+   * What surfaced an awaiting-user-fix failure: `'check'` for one a model-free
+   * check can see (a missing binary, a logged-out or API-key login, a failed
+   * lockdown self-check), `'run'` for one only a real run can see (a lockdown
+   * breach, a model the server rejects, a plan without Codex, a 401 while the
+   * login still looks fine). A passing check may clear the former; only a run
+   * that the model actually answers may clear the latter. Null when unknown.
+   */
+  lastErrorOrigin?: 'check' | 'run' | null;
+  /**
+   * The worker is holding the captured observations in memory and retrying on
+   * its own — a transport pause (the model could not be reached), not an
+   * outage a restart fixes. The banner says so and does NOT offer a restart,
+   * which would discard exactly the observations being retried.
+   */
+  lastErrorHeldForRetry?: boolean | null;
+  /** When a held-for-retry failure is next retried, epoch ms; null if unknown. */
+  lastErrorRetryAt?: number | null;
+  /**
    * Intentional pause while the provider quota breaker is withholding
    * generator starts. Distinct from lastError*: a cooldown is not a failure,
    * and must not flip the ledger to unhealthy. Null when no breaker is armed
@@ -92,12 +129,54 @@ export interface ObserverFailureDetail {
   action?: string;
   url?: string;
   requestId?: string;
+  /**
+   * Raise the banner after this many consecutive failures instead of the
+   * default. For failures after which the worker makes no further attempt on
+   * its own (see `lastErrorAlertThreshold`), or whose streak the caller already
+   * counted. Values outside 1..default are ignored.
+   */
+  alertThreshold?: number;
+  /** See `ObserverHealthState.lastErrorAwaitingUserFix`. */
+  awaitingUserFix?: boolean;
+  /** See `ObserverHealthState.lastErrorOrigin`. */
+  origin?: 'check' | 'run';
+  /** See `ObserverHealthState.lastErrorHeldForRetry`. */
+  heldForRetry?: boolean;
+  /** See `ObserverHealthState.lastErrorRetryAt`. */
+  retryAt?: number;
+  /**
+   * How many consecutive failures this one record stands for; default 1. For a
+   * caller that deliberately holds back the first few of a streak (a transport
+   * blip usually heals itself) and books them together once the streak proves
+   * real — so the banner still reads "failed 3 times in a row", not "1 time".
+   */
+  occurrences?: number;
 }
 
 export const OBSERVER_HEALTH_FILENAME = 'observer-health.json';
 
 /** Warn only after repeated failures — a single blip self-heals on retry. */
 export const OBSERVER_UNHEALTHY_FAILURE_THRESHOLD = 3;
+
+/**
+ * Threshold for a failure the worker will not retry by itself — a Codex setup
+ * or login problem the route gate now holds back (plan 3.6 (b)). One is
+ * enough: there will be no second attempt to count.
+ */
+export const OBSERVER_GATED_FAILURE_ALERT_THRESHOLD = 1;
+
+/**
+ * The threshold that applies to the ledger's CURRENT failure: the recorder's
+ * stated one when valid, else the default. Clamped so a hand-edited or garbled
+ * ledger can only make the banner more eager, never silence it.
+ */
+export function observerAlertThreshold(state: ObserverHealthState): number {
+  const stated = state.lastErrorAlertThreshold;
+  if (typeof stated !== 'number' || !Number.isInteger(stated) || stated < 1) {
+    return OBSERVER_UNHEALTHY_FAILURE_THRESHOLD;
+  }
+  return Math.min(stated, OBSERVER_UNHEALTHY_FAILURE_THRESHOLD);
+}
 
 const MAX_ERROR_MESSAGE_LENGTH = 600;
 
@@ -250,12 +329,15 @@ export function recordObserverFailure(
   filePath: string = defaultHealthFilePath(),
 ): void {
   const detail: ObserverFailureDetail = typeof error === 'string' ? { message: error } : error;
+  const occurrences = typeof detail.occurrences === 'number' && Number.isInteger(detail.occurrences) && detail.occurrences >= 1
+    ? detail.occurrences
+    : 1;
   withLedgerLock(filePath, () => {
     const prior = readObserverHealth(filePath) ?? EMPTY_STATE;
     const now = Date.now();
     writeObserverHealth({
       ...prior,
-      consecutiveFailures: prior.consecutiveFailures + 1,
+      consecutiveFailures: prior.consecutiveFailures + occurrences,
       failingSinceAt: prior.consecutiveFailures > 0 ? prior.failingSinceAt : now,
       lastErrorAt: now,
       lastErrorMessage: scrubErrorMessage(detail.message),
@@ -267,7 +349,53 @@ export function recordObserverFailure(
       lastErrorAction: detail.action ? scrubErrorMessage(detail.action) : null,
       lastErrorUrl: detail.url ?? null,
       lastErrorRequestId: detail.requestId ?? null,
+      // Same always-overwrite rule: a Codex login failure's "alert at 1" must
+      // not carry over to the next, unrelated failure.
+      lastErrorAlertThreshold: detail.alertThreshold ?? null,
+      lastErrorAwaitingUserFix: detail.awaitingUserFix ?? null,
+      lastErrorOrigin: detail.origin ?? null,
+      lastErrorHeldForRetry: detail.heldForRetry ?? null,
+      lastErrorRetryAt: typeof detail.retryAt === 'number' && Number.isFinite(detail.retryAt) ? detail.retryAt : null,
     }, filePath);
+  });
+}
+
+/**
+ * A problem only the user could fix has been fixed: drop the fix-it banner
+ * without pretending a store happened.
+ *
+ * Needed because the awaiting-user-fix record (a Codex setup or login problem,
+ * alert threshold 1) otherwise stays until the next successful store. A user
+ * who ran `codex login` while nothing was pending would keep being told to run
+ * it at every session start, and so would every session after a worker
+ * restart, since this file outlives the process while the gate's state does
+ * not.
+ *
+ * Only ever touches the ledger when its CURRENT failure is `provider`'s
+ * awaiting-user-fix record — a later, unrelated failure is left alone — and,
+ * when `confirmedBy` is `'check'`, only one a model-free check can disprove:
+ * a record a real run surfaced (`lastErrorOrigin: 'run'`) needs a run to
+ * clear it. Returns whether it cleared anything.
+ */
+export function recordObserverRecovered(
+  provider: string,
+  confirmedBy: 'check' | 'run',
+  filePath: string = defaultHealthFilePath(),
+): boolean {
+  return withLedgerLock(filePath, () => {
+    const prior = readObserverHealth(filePath);
+    if (!prior) return false;
+    if (prior.lastErrorAwaitingUserFix !== true || prior.lastErrorProvider !== provider) return false;
+    if (prior.consecutiveFailures <= 0) return false;
+    if (confirmedBy === 'check' && prior.lastErrorOrigin === 'run') return false;
+    writeObserverHealth({
+      ...prior,
+      consecutiveFailures: 0,
+      failingSinceAt: null,
+      lastErrorAwaitingUserFix: null,
+      lastErrorAlertThreshold: null,
+    }, filePath);
+    return true;
   });
 }
 
@@ -320,7 +448,7 @@ export function clearObserverQuotaCooldown(
 
 export function isObserverUnhealthy(state: ObserverHealthState | null): state is ObserverHealthState {
   return state !== null
-    && state.consecutiveFailures >= OBSERVER_UNHEALTHY_FAILURE_THRESHOLD
+    && state.consecutiveFailures >= observerAlertThreshold(state)
     && (state.lastErrorAt ?? 0) > (state.lastSuccessAt ?? 0);
 }
 
@@ -381,10 +509,44 @@ export function isObserverQuotaCooldownActive(
     && cooldown.until > nowMs;
 }
 
+/** "2026-09-23T16:35:00.000Z (about 4 hours from now)" for a resume instant. */
+function describeResumeAt(untilMs: number, nowMs: number): string {
+  return `${new Date(untilMs).toISOString()} (${describeDuration(Math.max(0, untilMs - nowMs))} from now)`;
+}
+
+/**
+ * The providers the observer resume scheduler serves: their paused sessions
+ * are started again when the pause ends, with no new tool call needed.
+ *
+ * Codex only, deliberately (plan 3.5 / section 10, question 8 — "all providers
+ * or only codex?" — is still the user's to answer). The quota banners may only
+ * promise "resumes on its own" for a provider where that is true; every other
+ * provider keeps its pre-M3 wording, because nothing restarts its paused
+ * sessions until the next captured tool call. Widening the scheduler to more
+ * providers means adding them here in the same change.
+ */
+const SCHEDULED_RESUME_PROVIDERS: ReadonlySet<string> = new Set(['codex']);
+
+/** True when `provider`'s paused sessions resume on a timer (see SCHEDULED_RESUME_PROVIDERS). */
+export function isScheduledResumeProvider(provider: string | null | undefined): boolean {
+  return typeof provider === 'string' && SCHEDULED_RESUME_PROVIDERS.has(provider);
+}
+
 /**
  * Session-start notice for an intentional quota pause. Distinct from the
  * failure warning: nothing is broken, the generator is withheld on purpose,
  * and queued work drains when the window clears.
+ *
+ * For a provider the resume scheduler serves (Codex) that drain is literal
+ * since M3: the scheduler probes one waiting session when `until` arrives and
+ * starts every waiting session once the breaker clears, with no new tool call
+ * needed, and `until` is Codex's own stated resume time when it gave one ("Try
+ * again at 4:35 PM"). What is still NOT true is durability: the queue lives in
+ * the worker's memory, so the notice says plainly that a restart loses it.
+ *
+ * Every other provider gets the pre-M3 wording, unchanged: their cooldown is
+ * mostly armed by a proactive guard (Claude pauses at 92-95% utilization, when
+ * the allowance is not actually used up), and they are not resumed on a timer.
  */
 export function renderObserverQuotaCooldownNotice(
   state: ObserverHealthState,
@@ -393,32 +555,146 @@ export function renderObserverQuotaCooldownNotice(
   const cooldown = state.quotaCooldown;
   const provider = cooldown?.provider ?? 'unknown provider';
   const until = cooldown?.until;
-  const untilText = until
-    ? `${new Date(until).toISOString()} (${describeDuration(Math.max(0, until - nowMs))} from now)`
-    : 'the next probe window';
+  const untilText = until ? describeResumeAt(until, nowMs) : 'the next probe window';
   const windowText = cooldown?.window ? ` (${cooldown.window})` : '';
   const message = cooldown?.message ? scrubErrorMessage(cooldown.message) : null;
+  const assistantLines = [
+    '(Assistant: tell the user that memory capture is paused for a quota cooldown',
+    'at the very start of your first reply. Do NOT restart the worker and do NOT',
+    'suggest restarting it.)',
+  ];
+
+  if (!isScheduledResumeProvider(cooldown?.provider)) {
+    return [
+      '⚠️ Heads up: claude-mem is paused while a provider quota cooldown is active.',
+      '',
+      `The memory observer is waiting out a quota cooldown on ${provider}${windowText} until ${untilText}.`,
+      '',
+      ...(message ? [`Latest signal: ${message}`, ''] : []),
+      'This is not a failure. Incoming observations stay queued and will be written',
+      'when the cooldown clears — the worker is intentionally not starting the',
+      'generator so it does not keep spending a spent allowance.',
+      '',
+      'Restarting will NOT help here, and it clears the backoff that is currently keeping',
+      'claude-mem from hammering the provider — so please leave the worker alone.',
+      '',
+      ...assistantLines,
+    ].join('\n');
+  }
+
+  // A rate limit / capacity refusal arms the same breaker, but "allowance used
+  // up" would send the user to check a plan that is not the problem.
+  const pauseText = cooldown?.window === 'rate_limit'
+    ? `The memory observer is rate-limited on ${provider} and is waiting out a quota cooldown${windowText}`
+    : `The memory observer's allowance on ${provider} is used up; it is waiting out a quota cooldown${windowText}`;
 
   return [
     '⚠️ Heads up: claude-mem is paused while a provider quota cooldown is active.',
     '',
-    `The memory observer is waiting out a quota cooldown on ${provider}${windowText} until ${untilText}.`,
+    `${pauseText} until ${untilText}.`,
     '',
     ...(message ? [`Latest signal: ${message}`, ''] : []),
-    'This is not a failure. Incoming observations stay queued and will be written',
-    'when the cooldown clears — the worker is intentionally not starting the',
-    'generator so it does not keep spending a spent allowance.',
+    "This is not a failure. Incoming observations stay queued in the worker's memory, and",
+    'the worker resumes on its own when the cooldown clears and writes them then — it is',
+    'intentionally not starting the generator so it does not keep spending a spent allowance.',
     '',
-    'Restarting will NOT help here, and it clears the backoff that is currently keeping',
-    'claude-mem from hammering the provider — so please leave the worker alone.',
+    'Restarting will NOT help here: it clears the backoff that is currently keeping claude-mem',
+    "from hammering the provider, and it discards the queued observations, which live only in",
+    "the worker's memory — so please leave the worker alone.",
     '',
-    '(Assistant: tell the user that memory capture is paused for a quota cooldown',
-    'at the very start of your first reply. Do NOT restart the worker and do NOT',
-    'suggest restarting it.)',
+    ...assistantLines,
+  ].join('\n');
+}
+
+/**
+ * The banner for a failure the user has to fix and the worker will not retry
+ * blindly (a Codex CLI that is not installed, a logged-out or API-key login, a
+ * failed lockdown self-check). Its own shape because the generic warning's
+ * remedy is wrong for it on both counts: it leads with a restart, which fixes
+ * none of these and throws away the observations the gate is holding, and it
+ * talks about repeated failures when the gate deliberately stopped after one.
+ */
+function renderAwaitingUserFixWarning(state: ObserverHealthState, nowMs: number): string {
+  const since = state.failingSinceAt ?? state.lastErrorAt;
+  const sinceText = since
+    ? `for ${describeDuration(nowMs - since)} (since ${new Date(since).toISOString()})`
+    : 'for an unknown amount of time';
+  const provider = state.lastErrorProvider ?? 'unknown provider';
+  const action = state.lastErrorAction ? scrubErrorMessage(state.lastErrorAction) : null;
+
+  return [
+    "⚠️ Heads up: claude-mem can't save memories right now.",
+    '',
+    `The memory observer (provider: ${provider}) has been waiting on a setup problem ${sinceText}.`,
+    '',
+    `Latest error: ${state.lastErrorMessage ? scrubErrorMessage(state.lastErrorMessage) : 'unknown'}`,
+    ...(action ? [`What to do: ${action}`] : []),
+    ...(state.lastErrorUrl ? [`Link: ${state.lastErrorUrl}`] : []),
+    ...(state.lastErrorRequestId ? [`Request id: ${state.lastErrorRequestId}`] : []),
+    '',
+    "Observations captured meanwhile are held in the worker's memory. Once this is fixed the",
+    'worker picks it up on its own (at its next re-check, or the next captured tool call)',
+    'and writes them — no restart needed. Restarting would not fix this, and it',
+    'discards the held observations.',
+    '',
+    '(Assistant: tell the user about this at the very start of your first reply, quoting the',
+    'error and what to do above. Do NOT restart the worker and do NOT suggest restarting it.)',
+  ].join('\n');
+}
+
+/**
+ * The banner for a transport pause the worker is retrying on its own: the
+ * observer could not reach its model (a network drop, an upstream outage, a
+ * timeout), and the captured observations are held in memory for the retry.
+ *
+ * Its own shape because the generic warning is wrong for it twice over. It
+ * says nothing will be remembered, when the held work is written as soon as a
+ * retry gets through; and it leads with a restart, which cannot fix an
+ * upstream or network outage and discards exactly the observations being
+ * retried.
+ */
+function renderHeldForRetryWarning(state: ObserverHealthState, nowMs: number): string {
+  const since = state.failingSinceAt ?? state.lastErrorAt;
+  const sinceText = since
+    ? `for ${describeDuration(nowMs - since)} (since ${new Date(since).toISOString()})`
+    : 'for an unknown amount of time';
+  const provider = state.lastErrorProvider ?? 'unknown provider';
+  const count = state.consecutiveFailures;
+  const action = state.lastErrorAction ? scrubErrorMessage(state.lastErrorAction) : null;
+  const retryAt = typeof state.lastErrorRetryAt === 'number' && state.lastErrorRetryAt > nowMs
+    ? state.lastErrorRetryAt
+    : null;
+
+  return [
+    "⚠️ Heads up: claude-mem can't save memories right now.",
+    '',
+    `The memory observer (provider: ${provider}) cannot reach its model: it has failed ${count} time${count === 1 ? '' : 's'} in a row ${sinceText}.`,
+    '',
+    `Latest error: ${state.lastErrorMessage ? scrubErrorMessage(state.lastErrorMessage) : 'unknown'}`,
+    ...(action ? [`What to do: ${action}`] : []),
+    ...(state.lastErrorUrl ? [`Link: ${state.lastErrorUrl}`] : []),
+    ...(state.lastErrorRequestId ? [`Request id: ${state.lastErrorRequestId}`] : []),
+    '',
+    "Observations captured meanwhile are held in the worker's memory, and the worker retries",
+    retryAt !== null
+      ? `on its own — next attempt at ${describeResumeAt(retryAt, nowMs)} — and writes them once it`
+      : 'on its own and writes them once it',
+    'gets through. Restarting would not fix a network or provider outage, and it discards the',
+    'held observations — so please leave the worker alone.',
+    '',
+    '(Assistant: tell the user about this at the very start of your first reply, quoting the',
+    'error above. Do NOT restart the worker and do NOT suggest restarting it.)',
   ].join('\n');
 }
 
 export function renderObserverHealthWarning(state: ObserverHealthState, nowMs: number = Date.now()): string {
+  if (state.lastErrorAwaitingUserFix === true) {
+    return renderAwaitingUserFixWarning(state, nowMs);
+  }
+  if (state.lastErrorHeldForRetry === true) {
+    return renderHeldForRetryWarning(state, nowMs);
+  }
+
   const since = state.failingSinceAt ?? state.lastErrorAt;
   const sinceText = since
     ? `for ${describeDuration(nowMs - since)} (since ${new Date(since).toISOString()})`
@@ -434,6 +710,16 @@ export function renderObserverHealthWarning(state: ObserverHealthState, nowMs: n
   // request storm the breaker exists to stop. Nothing is wedged; the account
   // is out of allowance. Say that, and relay the provider's own remedy.
   if (isQuotaFailure(state)) {
+    // When the breaker is still armed, `until` is when the worker re-probes on
+    // its own — the provider's stated resume time for Codex — so the user is
+    // told when to expect memory back rather than only that it is gone. Only
+    // for a provider the resume scheduler serves: for the others nothing
+    // re-probes without a new tool call, so the pre-M3 wording stays.
+    const resumeUntil = isScheduledResumeProvider(provider)
+      && isObserverQuotaCooldownActive(state, nowMs)
+      && state.quotaCooldown?.provider === provider
+      ? state.quotaCooldown.until
+      : null;
     return [
       "⚠️ Heads up: claude-mem can't save memories right now.",
       '',
@@ -444,8 +730,16 @@ export function renderObserverHealthWarning(state: ObserverHealthState, nowMs: n
       ...(state.lastErrorUrl ? [`Link: ${state.lastErrorUrl}`] : []),
       ...(state.lastErrorRequestId ? [`Request id: ${state.lastErrorRequestId}`] : []),
       '',
-      "Until the allowance resets or you add capacity, nothing from this session — or any",
-      'other — will be remembered.',
+      ...(resumeUntil !== null
+        ? [
+          `The worker tries again on its own at ${describeResumeAt(resumeUntil, nowMs)}.`,
+          "Observations captured until then stay queued in the worker's memory and are written",
+          'once the allowance is back; a worker restart discards them.',
+        ]
+        : [
+          "Until the allowance resets or you add capacity, nothing from this session — or any",
+          'other — will be remembered.',
+        ]),
       '',
       // Deliberately no restart link: nothing is broken to restart, and doing
       // it disarms the breaker that is currently protecting the account.

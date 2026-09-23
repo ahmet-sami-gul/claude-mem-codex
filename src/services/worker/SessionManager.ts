@@ -438,6 +438,32 @@ export class SessionManager {
     return this.buffer.getTotalDepth();
   }
 
+  /**
+   * Ids of live sessions that hold buffered work with no generator draining
+   * it — the sessions a paused observer left behind (M3, plan 3.5).
+   *
+   * The resume scheduler asks this when a pause ends: a quota window elapses
+   * (probe ONE of them), a breaker clears or Codex becomes ready (start ALL of
+   * them), a transport backoff runs out (this one, if it is still listed).
+   * Without it, a paused session's buffer only ever drained on that session's
+   * next captured tool call, so the last observations of a session that ended
+   * during a pause were never written.
+   *
+   * A session whose generator is still running is left out on purpose: that
+   * generator is already draining the buffer, and "starting" it again would
+   * only claim and release a gateway re-probe for nothing. Insertion order
+   * (oldest session first) is preserved, so a single probe goes to the work
+   * that has waited longest.
+   */
+  listSessionIdsWithPendingWork(): number[] {
+    const ids: number[] = [];
+    for (const [sessionDbId, session] of this.sessions) {
+      if (session.generatorPromise) continue;
+      if (this.buffer.getPendingCount(sessionDbId) > 0) ids.push(sessionDbId);
+    }
+    return ids;
+  }
+
   async getTotalActiveWork(): Promise<number> {
     return this.getTotalQueueDepth();
   }

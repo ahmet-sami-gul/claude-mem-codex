@@ -223,6 +223,8 @@ export class WorkerService implements WorkerRef {
   private geminiAgent: GeminiProvider;
   private openRouterAgent: OpenRouterProvider;
   private codexAgent: CodexProvider;
+  /** Held for the codex readiness warm-up at boot and the resume-timer cleanup at shutdown. */
+  private sessionRoutes: SessionRoutes | null = null;
   private paginationHelper: PaginationHelper;
   private settingsManager: SettingsManager;
   private sessionEventBroadcaster: SessionEventBroadcaster;
@@ -416,6 +418,7 @@ export class WorkerService implements WorkerRef {
 
     this.server.registerRoutes(new ViewerRoutes(this.sseBroadcaster, this.dbManager, this.sessionManager));
     const sessionRoutes = new SessionRoutes(this.sessionManager, this.dbManager, this.sdkAgent, this.geminiAgent, this.openRouterAgent, this.sessionEventBroadcaster, this, this.completionHandler, this.codexAgent);
+    this.sessionRoutes = sessionRoutes;
     this.server.registerRoutes(sessionRoutes);
     attachIngestGeneratorStarter((sessionDbId, source) =>
       sessionRoutes.ensureGeneratorRunning(sessionDbId, source),
@@ -552,6 +555,13 @@ export class WorkerService implements WorkerRef {
       } else {
         logger.info('SYSTEM', 'Dependency preflight passed');
       }
+      // Codex only, and in the BACKGROUND: the preflight above deliberately
+      // stops at binary resolution because the lockdown self-check is async
+      // and must not hold boot. Starting it here, unawaited, settles the
+      // verdict — and clears a stale "run codex login" banner the previous
+      // process left in observer-health.json — before the first session start
+      // asks. Model-free; a no-op for every other provider.
+      this.sessionRoutes?.warmUpCodexReadiness();
 
       logger.info('WORKER', 'Checking for one-time CWD remap...');
       runOneTimeCwdRemap();
@@ -882,6 +892,9 @@ export class WorkerService implements WorkerRef {
       isShuttingDown: () => this.isShuttingDown,
       markShuttingDown: () => { this.isShuttingDown = true; },
       beforeGracefulShutdown: async () => {
+        // No observer resume may start a generator while the sessions are
+        // being torn down; the timers are unref'd and in-memory anyway.
+        this.sessionRoutes?.dispose();
         if (this.deferredSessionEndReplayTimer !== null) {
           clearInterval(this.deferredSessionEndReplayTimer);
           this.deferredSessionEndReplayTimer = null;
@@ -1627,6 +1640,15 @@ export function formatDependencyHealthHint(health: WorkerHealthSnapshot): string
   const labels = dependencies.statuses.map(status => {
     if (status.dependency === 'claude_cli' && status.kind === 'setup_required') {
       return 'Claude CLI setup required';
+    }
+    if (status.dependency === 'codex_cli' && status.kind === 'setup_required') {
+      return 'Codex CLI setup required';
+    }
+    // Named separately from setup: the remedy is a login, not an install, and
+    // the fallback below would print the raw `codex_cli: auth_required` key at
+    // a user.
+    if (status.dependency === 'codex_cli' && status.kind === 'auth_required') {
+      return 'Codex CLI login required';
     }
     if (status.dependency === 'uvx' && status.kind === 'vector_search_unavailable') {
       return 'uvx unavailable for vector search';

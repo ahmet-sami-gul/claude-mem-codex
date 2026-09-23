@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import type { ActiveSession } from '../../src/services/worker-types.js';
-import { resetQuotaCooldownsForTesting } from '../../src/shared/quota-cooldown.js';
+import { getQuotaCooldown, resetQuotaCooldownsForTesting } from '../../src/shared/quota-cooldown.js';
 import { resetDependencyStatusesForTesting } from '../../src/shared/dependency-health.js';
 
 const { SessionRoutes } = await import('../../src/services/worker/http/routes/SessionRoutes.js');
@@ -133,6 +133,12 @@ describe('observer resumes itself after recycling its conversation (#3800)', () 
     expect(starts).toBe(1);
   });
 
+  // A Claude quota pause waits for the user's next tool call, exactly as
+  // before M3: the observer resume scheduler serves codex only until plan
+  // question 8 (all providers, or codex only?) is answered. A timer here would
+  // re-probe the Anthropic plan every breaker window on an idle machine —
+  // the proactive guard that armed it pauses at 92-95% utilization precisely
+  // to protect that plan.
   it('does not resume on a quota pause — that one waits for the user', async () => {
     const session = makeSession();
     let starts = 0;
@@ -147,6 +153,13 @@ describe('observer resumes itself after recycling its conversation (#3800)', () 
     await nextTick();
 
     expect(starts).toBe(1);
+    // The breaker itself is armed as before (pre-M3 window arithmetic)...
+    expect(getQuotaCooldown('claude')?.armedAtMs).toBeDefined();
+    expect(getQuotaCooldown('claude')?.resumeAtMs).toBeUndefined();
+    // ...but nothing is scheduled to restart the generator on its own.
+    expect(routes.resumeScheduler.snapshot().quota.claude).toBeUndefined();
+    expect(routes.resumeScheduler.snapshot().listeningForQuotaClears).toBe(false);
+    routes.resumeScheduler.dispose();
   });
 
   it('does not resume on an auth pause', async () => {

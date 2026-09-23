@@ -3,12 +3,14 @@ import os from 'os';
 import fs from 'fs';
 import { sanitizeEnv } from '../../supervisor/env-sanitizer.js';
 import { findClaudeExecutable as defaultFindClaudeExecutable } from '../../shared/find-claude-executable.js';
+import { findCodexExecutable as defaultFindCodexExecutable } from '../../shared/find-codex-executable.js';
 import { getUvxBinDirs } from '../../shared/uvx-bin-dirs.js';
 import { stripForeignPythonEnv } from '../../shared/uvx-env.js';
 import { logger } from '../../utils/logger.js';
 import {
   clearDependencyStatus,
   recordClaudeCliSetupRequired,
+  recordCodexCliSetupRequired,
   recordUvxVectorSearchUnavailable,
   snapshotDependencyHealth,
   type DependencyHealthSnapshot,
@@ -17,6 +19,7 @@ import {
 interface DependencyPreflightSettings {
   CLAUDE_MEM_PROVIDER?: string;
   CLAUDE_MEM_CHROMA_ENABLED?: string;
+  CLAUDE_MEM_CODEX_PATH?: string;
 }
 
 interface ClassifiedClaudeSetupError {
@@ -28,6 +31,15 @@ export interface WorkerDependencyPreflightOptions {
   settings: DependencyPreflightSettings;
   classifyClaudeError: (error: unknown) => ClassifiedClaudeSetupError;
   findClaudeExecutable?: () => string;
+  /**
+   * Injected by tests; defaults to `findCodexExecutable`. It receives the
+   * options preflight resolves with — `explicitPath` is CLAUDE_MEM_CODEX_PATH,
+   * which is authoritative and fails closed — so a test can see that the
+   * setting actually reaches resolution. The return value is ignored:
+   * preflight only asks whether the binary resolves at all, so it is typed as
+   * `unknown` rather than dragging CodexExecutableResolution through here.
+   */
+  findCodexExecutable?: (options: { explicitPath: string }) => unknown;
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
   homedir?: () => string;
@@ -178,8 +190,37 @@ export function runWorkerDependencyPreflight(options: WorkerDependencyPreflightO
       }, err);
       recordClaudeCliSetupRequired(message);
     }
+    clearDependencyStatus('codex_cli');
+  } else if (provider === 'codex') {
+    // RESOLUTION ONLY. The Codex readiness question has two halves — "is there
+    // a binary?" and "does it pass the lockdown self-check?" — and only the
+    // first one belongs here.
+    //
+    // The self-check spawns four probe subprocesses (`--version`,
+    // `features list`, `debug prompt-input`, `login status`) and is async by
+    // construction. This function is synchronous and runs on the worker's boot
+    // path (worker-service.ts), so awaiting it would hold the whole worker
+    // shut behind four process spawns before a single route is mounted, and
+    // NOT awaiting it would record a verdict that had not been reached.
+    //
+    // The self-check therefore runs from the non-blocking codex gate in
+    // SessionRoutes instead. Skipping it here costs nothing: the gate refuses
+    // to start a generator until a cached PASSED verdict exists, so an
+    // unverified binary never reaches a paid exec — it just is not
+    // pre-announced in the boot log.
+    const findCodex = options.findCodexExecutable ?? defaultFindCodexExecutable;
+    try {
+      findCodex({ explicitPath: options.settings.CLAUDE_MEM_CODEX_PATH ?? '' });
+      clearDependencyStatus('codex_cli');
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.warn('WORKER', 'Codex CLI dependency preflight failed', {}, err);
+      recordCodexCliSetupRequired(`Codex CLI preflight failed: ${err.message}`);
+    }
+    clearDependencyStatus('claude_cli');
   } else {
     clearDependencyStatus('claude_cli');
+    clearDependencyStatus('codex_cli');
   }
 
   if (chromaEnabled) {

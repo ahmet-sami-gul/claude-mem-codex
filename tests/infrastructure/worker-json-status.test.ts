@@ -203,6 +203,35 @@ describe('worker-json-status', () => {
       expect(hint).toBe('  Dependencies: degraded (Claude CLI setup required, uvx unavailable for vector search, Chroma unavailable for vector search). Run npx claude-mem doctor or open Settings for remediation.');
     });
 
+    it('names the two codex_cli states instead of printing the raw keys', () => {
+      const setup = formatDependencyHealthHint({
+        dependencies: {
+          degraded: true,
+          statuses: [{
+            dependency: 'codex_cli',
+            kind: 'setup_required',
+            message: 'Codex CLI preflight failed',
+            recordedAtMs: 126,
+          }],
+        },
+      });
+      expect(setup).toContain('Codex CLI setup required');
+
+      const auth = formatDependencyHealthHint({
+        dependencies: {
+          degraded: true,
+          statuses: [{
+            dependency: 'codex_cli',
+            kind: 'auth_required',
+            message: 'not logged in',
+            recordedAtMs: 127,
+          }],
+        },
+      });
+      expect(auth).toContain('Codex CLI login required');
+      expect(auth).not.toContain('codex_cli:');
+    });
+
     it('returns null when dependencies are healthy or absent', () => {
       expect(formatDependencyHealthHint({})).toBeNull();
       expect(formatDependencyHealthHint({

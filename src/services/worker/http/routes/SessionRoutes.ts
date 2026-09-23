@@ -10,7 +10,7 @@ import { DatabaseManager } from '../../DatabaseManager.js';
 import { ClaudeProvider } from '../../ClaudeProvider.js';
 import { GeminiProvider } from '../../GeminiProvider.js';
 import { OpenRouterProvider } from '../../OpenRouterProvider.js';
-import { CodexProvider } from '../../CodexProvider.js';
+import { CodexProvider, isCodexQuotaCircuitRefusal } from '../../CodexProvider.js';
 import { getSelectedProvider, recordCmemFallbackIfEligible, releaseCmemGatewayProbe, selectProviderForGenerator } from '../../provider-dispatch.js';
 import type { ObserverProvider } from '../../../worker-types.js';
 import type { WorkerService } from '../../../worker-service.js';
@@ -28,6 +28,7 @@ import { SessionCompletionHandler } from '../../session/SessionCompletionHandler
 import { USER_PROMPT_DEDUPE_WINDOW_MS } from '../../../../shared/user-prompts.js';
 import {
   CLAUDE_CLI_SETUP_RECHECK_COOLDOWN_MS,
+  CODEX_CLI_AUTH_REMEDIATION,
   clearDependencyStatus,
   getDependencyStatus,
   isDependencyStatusInCooldown,
@@ -40,14 +41,40 @@ import {
   releaseQuotaProbe,
   recordQuotaExhausted,
   getQuotaCooldown,
-  QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS,
+  quotaCooldownResumeAtMs,
 } from '../../../../shared/quota-cooldown.js';
 import { ClassifiedProviderError, isClassified, describeProviderError } from '../../provider-errors.js';
+import {
+  CodexReadinessGate,
+  codexProblemFromError,
+  isCodexReadinessSource,
+  recordCodexProblem,
+  type CodexProblem,
+} from '../../session/codex-readiness-gate.js';
+import {
+  ObserverResumeScheduler,
+  TRANSPORT_HEALTH_RECORD_AFTER_EXITS,
+  TRANSPORT_RESUME_MAX_EXITS,
+  transportResumeDelayMs,
+  type ObserverResumeSchedulerDeps,
+} from '../../session/observer-resume-scheduler.js';
 import { classifyClaudeError } from '../../ClaudeProvider.js';
 import { isSessionParkedForSlot } from '../../../../supervisor/process-registry.js';
 import type { TelegramWrapupFormatterInput } from '../../../integrations/TelegramWrapupNotifier.js';
 
 const MAX_USER_PROMPT_BYTES = 256 * 1024;
+
+/** The generic text a quota pause is booked with when no provider stated one. */
+const GENERIC_QUOTA_MESSAGE = 'Provider reported the inference allowance exhausted';
+
+/**
+ * Optional seams, last in the constructor so every existing positional
+ * construction keeps compiling.
+ */
+export interface SessionRoutesOptions {
+  /** Clock and timers for the resume scheduler (tests). */
+  resumeSchedulerDeps?: Pick<ObserverResumeSchedulerDeps, 'now' | 'setTimer' | 'clearTimer'>;
+}
 
 /**
  * Collapse session.abortReason onto a closed telemetry enum. The raw value can
@@ -84,6 +111,31 @@ export class SessionRoutes extends BaseRouteHandler {
   // logic this now gates.
   private ensureGeneratorLocks = new Map<number, Promise<void>>();
 
+  /**
+   * Drain-on-clear (M3, plan 3.5): starts paused sessions again when their
+   * pause ends — a quota window elapsing or clearing, a transport backoff, a
+   * codex check passing — instead of leaving the buffer for a tool call that
+   * may never come. Fed Codex pauses only, until plan question 8 decides
+   * whether the other providers should get it. Public for tests and
+   * diagnostics.
+   */
+  readonly resumeScheduler: ObserverResumeScheduler;
+
+  /**
+   * The non-blocking codex readiness gate (M3). Null when the codex agent
+   * cannot report its readiness (a worker built without codex, or a test
+   * double): the provider's own `isConfigured` still refuses an unverified
+   * start, the gate only makes that refusal cheap and self-healing.
+   */
+  readonly codexGate: CodexReadinessGate | null;
+
+  /**
+   * Quota probe claims whose generator run is still in flight. The resume
+   * scheduler's watchdog never takes over a live probe, however long it runs:
+   * a takeover would put a second paid Codex exec alongside the first.
+   */
+  private readonly liveProbeClaims = new Set<number>();
+
   constructor(
     private sessionManager: SessionManager,
     private dbManager: DatabaseManager,
@@ -101,9 +153,75 @@ export class SessionRoutes extends BaseRouteHandler {
      * session on Claude.
      */
     private codexAgent?: CodexProvider,
+    options: SessionRoutesOptions = {},
   ) {
     super();
     this.sessionManager.setTelegramWrapupFormatter?.(this.formatTelegramWrapup);
+    this.resumeScheduler = new ObserverResumeScheduler({
+      ...options.resumeSchedulerDeps,
+      resume: (sessionDbId, source) => this.ensureGeneratorRunning(sessionDbId, source),
+      // Optional-called like setTelegramWrapupFormatter above: several suites
+      // hand in a partial SessionManager double.
+      listSessionIdsWithPendingWork: () => this.sessionManager.listSessionIdsWithPendingWork?.() ?? [],
+      isSingleResumeCandidate: (sessionDbId) => this.isSingleResumeCandidate(sessionDbId),
+      isQuotaProbeHolderActive: (_provider, claimId) => this.liveProbeClaims.has(claimId),
+      recheckDependency: () => this.recheckCodexDependency(),
+    });
+    this.codexGate = isCodexReadinessSource(codexAgent)
+      ? new CodexReadinessGate(codexAgent, {
+        onReady: (scope) => {
+          if (scope === 'canary') {
+            this.resumeScheduler.resumeOnePending('codex-canary');
+          } else {
+            this.resumeScheduler.resumeAllPending('codex-ready');
+          }
+        },
+        onHeld: (retryAtMs) => this.resumeScheduler.noteDependencyPause(retryAtMs),
+      })
+      : null;
+  }
+
+  /**
+   * Whether a waiting session is worth starting ALONE (the single quota probe,
+   * the codex canary): not while its overflow pause would turn the start away
+   * before it reached anything, and not once its own transport keeps failing —
+   * spending the one attempt on either leaves everyone else waiting.
+   */
+  private isSingleResumeCandidate(sessionDbId: number): boolean {
+    const session = this.sessionManager.getSession(sessionDbId);
+    if (!session) return false;
+    if (session.overflowPausedUntilMs && Date.now() < session.overflowPausedUntilMs) return false;
+    return (session.consecutiveTransportExits ?? 0) < TRANSPORT_RESUME_MAX_EXITS;
+  }
+
+  /**
+   * The codex re-check window arrived with work waiting (the resume
+   * scheduler's dependency timer). The gate re-checks directly. If codex is no
+   * longer the selected provider there is nothing to re-check: start what
+   * waited, and it goes to whichever provider is selected now.
+   */
+  private recheckCodexDependency(): void {
+    if (this.codexGate && getSelectedProvider() === 'codex') {
+      this.codexGate.requestRecheck();
+      return;
+    }
+    this.resumeScheduler.resumeAllPending('codex-recheck');
+  }
+
+  /**
+   * Boot: settle the codex readiness verdict in the background when codex is
+   * selected, so a stale fix-it banner from the previous process is resolved
+   * before the first session start asks. Never blocks and never spends.
+   */
+  warmUpCodexReadiness(): void {
+    if (!this.codexGate || getSelectedProvider() !== 'codex') return;
+    this.codexGate.warmUp();
+  }
+
+  /** Cancel the resume timers and the gate's listeners. For worker shutdown and tests. */
+  dispose(): void {
+    this.resumeScheduler.dispose();
+    this.codexGate?.dispose();
   }
 
   private formatTelegramWrapup = async (input: TelegramWrapupFormatterInput): Promise<string> => {
@@ -331,6 +449,24 @@ export class SessionRoutes extends BaseRouteHandler {
       throw error;
     }
 
+    // The codex readiness gate (M3), the counterpart of the Claude setup gate
+    // in ensureGeneratorRunningLocked but NON-BLOCKING: ingest awaits this
+    // method (through ensureGeneratorRunning), so the gate answers
+    // synchronously and anything slow it needs (the lockdown self-check, a
+    // re-check after a login problem) runs in the background, with its result
+    // resuming the held sessions through the scheduler. It sits here rather than
+    // beside the Claude gate so the parked provider-switch path is covered too,
+    // and ahead of the quota admission so a held start never holds the probe.
+    // It never spends: no exec, only cached verdicts and model-free probes.
+    const codexGate = selectedProvider === 'codex' ? this.codexGate : null;
+    if (codexGate) {
+      const decision = codexGate.check(sessionDbId, source);
+      if (!decision.proceed) {
+        releaseCmemGatewayProbe(gatewayProbeClaimId);
+        return;
+      }
+    }
+
     // Quota breaker (#3634). Without this, an exhausted allowance produced one
     // doomed request per captured tool call for the rest of the billing cycle:
     // the generator exits on the refusal, and the next observation starts a
@@ -341,8 +477,11 @@ export class SessionRoutes extends BaseRouteHandler {
     // them all through together.
     const admission = tryAdmitQuotaProbe(selectedProvider);
     if (!admission.admitted) {
-      // This run is not starting, so it must not hold the gateway re-probe.
+      // This run is not starting, so it must not hold the gateway re-probe,
+      // nor the admission the codex gate just gave it (a canary slot, if it
+      // was the canary).
       releaseCmemGatewayProbe(gatewayProbeClaimId);
+      codexGate?.releaseStart(sessionDbId);
       const cooldown = getQuotaCooldown(selectedProvider);
       logger.warn('SESSION', 'Skipping generator start while the provider quota cooldown is active', {
         sessionId: sessionDbId,
@@ -350,19 +489,36 @@ export class SessionRoutes extends BaseRouteHandler {
         provider: selectedProvider,
         ...(cooldown?.window ? { window: cooldown.window } : {}),
         probeInFlight: cooldown?.probeInFlightSinceMs !== null,
+        // The instant admission itself uses: the provider's stated resume time
+        // when it gave one, else the fixed window. Deriving it from the fixed
+        // constant told a codex user "back in 30 minutes" about a window that
+        // actually reset hours later.
         retryInMs: cooldown
-          ? Math.max(0, QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS - (Date.now() - cooldown.armedAtMs))
+          ? Math.max(0, quotaCooldownResumeAtMs(cooldown) - Date.now())
           : 0,
       });
+      // This session now waits on the breaker with work buffered; make sure the
+      // scheduler will probe or drain it when the window ends, even if no
+      // further tool call arrives. Idempotent per breaker. Codex only: whether
+      // the other providers resume on a timer is plan question 8, not yet
+      // answered, and until then they wait for the next tool call as before.
+      if (selectedProvider === 'codex') {
+        this.resumeScheduler.noteQuotaPause(selectedProvider);
+      }
       return;
     }
 
-    await this.applyTierRouting(session);
-    // The claim travels with the run that took it: only that run may release
-    // it, or an earlier generator's exit would clear a later session's probe.
-    await this.startGeneratorWithProvider(
-      session, selectedProvider, source, admission.claimId, gatewayProbeClaimId,
-    );
+    try {
+      await this.applyTierRouting(session);
+      // The claim travels with the run that took it: only that run may release
+      // it, or an earlier generator's exit would clear a later session's probe.
+      await this.startGeneratorWithProvider(
+        session, selectedProvider, source, admission.claimId, gatewayProbeClaimId,
+      );
+    } catch (error: unknown) {
+      codexGate?.releaseStart(sessionDbId);
+      throw error;
+    }
   }
 
   /**
@@ -435,6 +591,12 @@ export class SessionRoutes extends BaseRouteHandler {
     // reader — status, observer health, a provider's quota circuit — which
     // would act on a condition that cleared long ago.
     session.lastProviderError = null;
+    // The probe this run owns, where the codex quota circuit can see it: the
+    // circuit lets exactly this generator through a breaker that is otherwise
+    // holding everyone (plan 3.4). Null when the run was admitted without a
+    // breaker in place, which the circuit correctly treats as "not the probe".
+    session.quotaProbeClaimId = quotaProbeClaimId;
+    if (quotaProbeClaimId !== null) this.liveProbeClaims.add(quotaProbeClaimId);
     session.lastGeneratorActivity = Date.now();
     // Providers refine this per-prompt ('init'|'ingest'|'summarize'); this is
     // the fallback when a generator dies before dispatching its first prompt.
@@ -470,6 +632,12 @@ export class SessionRoutes extends BaseRouteHandler {
           skipGeneratorExitFinalization = true;
           if (provider === 'claude') {
             recordClaudeCliSetupRequired(error.message);
+          }
+          if (provider === 'codex') {
+            // The gate sorts a check that has merely not finished (restart it
+            // in the background, no banner) from a real setup problem (codex_cli
+            // record + observer-health record + backoff + a scheduled re-check).
+            this.codexGate?.onStartRefused(error, session.sessionDbId);
           }
           logger.warn('SESSION', 'Generator start requires setup; the buffered work is preserved', {
             sessionId: session.sessionDbId,
@@ -565,6 +733,18 @@ export class SessionRoutes extends BaseRouteHandler {
         });
       })
       .finally(async () => {
+        // Per-run state, read once and then cleared (M3): the branches below
+        // book THIS run's failure from it, and neither may outlive the run —
+        // a stale lastProviderError would be re-booked by a later exit, and a
+        // stale claim id would let the codex circuit wave a later generator
+        // through as "the probe".
+        const providerError = session.lastProviderError ?? null;
+        session.lastProviderError = null;
+        if (session.quotaProbeClaimId === quotaProbeClaimId) {
+          session.quotaProbeClaimId = null;
+        }
+        if (quotaProbeClaimId !== null) this.liveProbeClaims.delete(quotaProbeClaimId);
+
         if (skipGeneratorExitFinalization) {
           if (session.generatorPromise === generatorPromise) {
             session.generatorPromise = null;
@@ -572,6 +752,9 @@ export class SessionRoutes extends BaseRouteHandler {
           if (session.currentProvider === provider) {
             session.currentProvider = null;
           }
+          // The gate's admission for this run ends here too (a refused canary
+          // reopens its slot; the refusal itself was booked in .catch).
+          if (provider === 'codex') this.codexGate?.noteRunEnded(session.sessionDbId);
           // This run is over even though it skips finalization, so it must not
           // keep holding the probe.
           releaseQuotaProbe(provider, quotaProbeClaimId);
@@ -581,18 +764,41 @@ export class SessionRoutes extends BaseRouteHandler {
 
         const reason = session.abortReason ?? null;
         session.abortReason = null;  // consume the reason
+        // The raw category, not normalizeAbortReason: that one is a closed
+        // telemetry enum and folds 'auth' and 'transport' into 'none'.
+        const pauseCategory = (reason ?? '').split(':')[0];
         // Quota surfaced as assistant prose aborts here rather than throwing, so
         // it must arm the breaker too — otherwise the prose path keeps the
         // per-observation request storm the classified path no longer has.
         if (normalizeAbortReason(reason) === 'quota') {
-          const quotaMessage = 'Provider reported the inference allowance exhausted';
-          recordQuotaExhausted(provider, quotaMessage, reason?.split(':')[1]);
-          // Quota returned as assistant prose never throws, so it never reaches
-          // the .catch above and never armed the health ledger. Without this the
-          // session-start warning is structurally blind to an entire outage
-          // class: the allowance is spent, no observation will ever store, and
-          // the user is told nothing.
-          recordObserverFailure(provider, { message: quotaMessage, kind: 'quota_exhausted' });
+          this.bookQuotaPause(session.sessionDbId, provider, reason, providerError);
+        } else if (pauseCategory === 'auth' && provider === 'codex') {
+          this.bookCodexAuthPause(session.sessionDbId, providerError);
+        }
+        // Plan question 8 (all providers, or codex only?) is still open, so
+        // the M3 transport handling — the health record and the scheduled
+        // resume — is codex-only; claude, gemini and openrouter keep their
+        // pre-M3 transport pause (buffer kept, next tool call resumes, no
+        // ledger entry). The streak itself is counted for every provider: it
+        // is plain session state that nothing else reads for them.
+        let transportExits = 0;
+        if (pauseCategory === 'transport') {
+          transportExits = (session.consecutiveTransportExits ?? 0) + 1;
+          session.consecutiveTransportExits = transportExits;
+          if (provider === 'codex') {
+            this.bookTransportPause(provider, transportExits, providerError, Date.now() + transportResumeDelayMs(transportExits));
+          }
+        } else {
+          session.consecutiveTransportExits = 0;
+        }
+        if (provider === 'codex') {
+          // Forget the gate's admission for this run. Whether the run proved
+          // Codex healthy is NOT decided here: an exit without a login problem
+          // also covers idle exits, circuit refusals and runs admitted before
+          // the problem. The gate hears the model's answers directly
+          // (observer-turn-signal) and ends a problem streak only on one of
+          // those, from a run admitted after the problem.
+          this.codexGate?.noteRunEnded(session.sessionDbId);
         }
         if (reason !== null) {
           // Abort accounting lives HERE, where the reason is consumed — the
@@ -622,11 +828,19 @@ export class SessionRoutes extends BaseRouteHandler {
           completionHandler: this.completionHandler,
         });
 
-        // A recycle is the one abort that should resume on its own. The batch
-        // was reset to pending and the conversation dropped; without this the
-        // work waits for the next captured tool call, so the final observation
-        // of a session is stranded when none arrives. Quota and auth pauses
-        // deliberately do NOT resume — those wait on the user.
+        // A recycle resumes at once: the batch was reset to pending and the
+        // conversation dropped; without this the work waits for the next
+        // captured tool call, so the final observation of a session is
+        // stranded when none arrives.
+        //
+        // A codex quota or transport pause is handed to the resume scheduler
+        // (M3) for the same reason, but on the pause's own clock: a quota pause
+        // at the breaker's resume time (one probe, then everyone once it
+        // clears), a transport pause after a growing backoff. A codex login
+        // pause was handed over above, by the gate, when it booked the problem.
+        // Scheduled AFTER handleGeneratorExit, which is what frees the session
+        // to start. The other providers' pauses still wait for the next
+        // captured tool call, as before M3 (plan question 8 is still open).
         if (reason === 'overflow:recycle') {
           // Deferred a tick: `session.generatorPromise` is assigned after this
           // chain is built, so resuming inline could be overwritten by that
@@ -640,9 +854,134 @@ export class SessionRoutes extends BaseRouteHandler {
               });
           }, 0);
           resume.unref?.();
+        } else if (provider === 'codex' && pauseCategory === 'quota') {
+          this.resumeScheduler.noteQuotaPause(provider, session.sessionDbId);
+        } else if (provider === 'codex' && pauseCategory === 'transport') {
+          this.resumeScheduler.noteTransportPause(session.sessionDbId, transportExits);
         }
       });
     session.generatorPromise = generatorPromise;
+  }
+
+  /**
+   * Book a quota pause: arm the breaker and the observer-health ledger.
+   *
+   * Codex states what it refused with and when the allowance returns ("You've
+   * hit your usage limit ... Try again at 4:35 PM"); both reach the breaker and
+   * the banner verbatim, through `session.lastProviderError`. Every other
+   * provider is booked exactly as before M3 — the generic message and the
+   * fixed window — because their `retryAfterMs` means something else (an HTTP
+   * Retry-After of seconds), and treating it as a resume time would shorten a
+   * 30-minute breaker to a few seconds.
+   *
+   * A refusal the codex circuit raised itself is not news: the breaker it read
+   * is already armed and the ledger already shows the pause. Re-arming would
+   * restamp the window on every generator that bumped into it (on a busy
+   * machine, indefinitely), so it is not re-booked.
+   */
+  private bookQuotaPause(
+    sessionDbId: number,
+    provider: ObserverProvider,
+    reason: string | null,
+    providerError: ClassifiedProviderError | null,
+  ): void {
+    const window = reason?.split(':')[1];
+    if (provider === 'codex' && isCodexQuotaCircuitRefusal(providerError)) {
+      logger.debug('SESSION', 'Codex generator stopped by its own quota circuit; the breaker is already armed', {
+        sessionId: sessionDbId,
+        ...(providerError?.code ? { code: providerError.code } : {}),
+      });
+      return;
+    }
+    const stated = provider === 'codex'
+      && providerError
+      && (providerError.kind === 'quota_exhausted' || providerError.kind === 'rate_limit')
+      ? providerError
+      : null;
+    const message = stated?.message ?? GENERIC_QUOTA_MESSAGE;
+    const resumeAtMs = stated?.retryAfterMs !== undefined ? Date.now() + stated.retryAfterMs : undefined;
+    recordQuotaExhausted(provider, message, window, undefined, resumeAtMs);
+    // Quota returned as assistant prose never throws, so it never reaches
+    // the .catch above and never armed the health ledger. Without this the
+    // session-start warning is structurally blind to an entire outage
+    // class: the allowance is spent, no observation will ever store, and
+    // the user is told nothing.
+    recordObserverFailure(provider, stated
+      ? {
+        message,
+        kind: 'quota_exhausted',
+        ...(stated.code ? { code: stated.code } : {}),
+        ...(stated.action ? { action: stated.action } : {}),
+        ...(stated.url ? { url: stated.url } : {}),
+        ...(stated.requestId ? { requestId: stated.requestId } : {}),
+      }
+      : { message, kind: 'quota_exhausted' });
+  }
+
+  /**
+   * Book a codex login pause (M3): the session keeps its buffer, the gate
+   * holds further starts behind a `codex_cli` auth_required backoff (so a
+   * logged-out Codex is not spawned per tool call), and the banner tells the
+   * user to run `codex login` from the first occurrence. The gate also arms the
+   * re-check that resumes the session once the login is back.
+   *
+   * Codex only: the other providers' auth pauses have no re-check to wait on,
+   * and their behaviour is unchanged.
+   */
+  private bookCodexAuthPause(sessionDbId: number, providerError: ClassifiedProviderError | null): void {
+    const fromError: CodexProblem | null = providerError && providerError.kind === 'auth_invalid'
+      ? codexProblemFromError(providerError)
+      : null;
+    const problem: CodexProblem = {
+      kind: 'auth_required',
+      message: fromError?.message ?? 'Codex reported that its ChatGPT login is missing or expired',
+      ...(fromError?.code ? { code: fromError.code } : {}),
+      action: CODEX_CLI_AUTH_REMEDIATION,
+    };
+    if (this.codexGate) {
+      this.codexGate.noteProblem(problem, sessionDbId);
+    } else {
+      recordCodexProblem(problem);
+    }
+  }
+
+  /**
+   * Book a transport pause once it has happened TRANSPORT_HEALTH_RECORD_AFTER_EXITS
+   * times in a row for this session. The first ones are left to the scheduled
+   * resume: a dropped connection usually heals, and before M3 a transport pause
+   * never reached the ledger at all — which also meant a provider that could
+   * not be reached for hours never raised the banner.
+   *
+   * Booked as HELD FOR RETRY, with the instant of the next scheduled attempt:
+   * the buffer is kept in the worker's memory and the scheduler retries it on
+   * its own. The banner then says exactly that, and does not offer the
+   * generic outage's restart — which cannot fix a network or provider outage
+   * and would discard the very observations being retried.
+   *
+   * Codex only, like the resume that makes "retries on its own" true (plan
+   * question 8).
+   */
+  private bookTransportPause(
+    provider: ObserverProvider,
+    consecutiveExits: number,
+    providerError: ClassifiedProviderError | null,
+    retryAtMs: number,
+  ): void {
+    if (consecutiveExits < TRANSPORT_HEALTH_RECORD_AFTER_EXITS) return;
+    const stated = providerError?.kind === 'transient' ? providerError : null;
+    recordObserverFailure(provider, {
+      message: stated?.message ?? `The ${provider} observer could not reach its model (transport failure)`,
+      kind: 'transient',
+      ...(stated?.code ? { code: stated.code } : {}),
+      ...(stated?.action ? { action: stated.action } : {}),
+      ...(stated?.url ? { url: stated.url } : {}),
+      ...(stated?.requestId ? { requestId: stated.requestId } : {}),
+      // The held-back exits are booked together with the one that proved the
+      // streak, so the banner counts all of them.
+      occurrences: consecutiveExits === TRANSPORT_HEALTH_RECORD_AFTER_EXITS ? TRANSPORT_HEALTH_RECORD_AFTER_EXITS : 1,
+      heldForRetry: true,
+      retryAt: retryAtMs,
+    });
   }
 
   setupRoutes(app: express.Application): void {

@@ -48,6 +48,17 @@ export interface CodexTurnContext {
   /** Audit/log context only. */
   contentSessionId?: string;
   project?: string;
+  /**
+   * Last word before a process exists: called after the pool slot is granted
+   * and immediately before the spawn, with the slot still held. Throwing
+   * refuses the turn — the slot is released and nothing is spawned.
+   *
+   * The provider's quota circuit also runs before the turn is handed to the
+   * transport, but a turn can then wait for a slot indefinitely (#2756), and
+   * a breaker armed while it waited would otherwise not be seen until after
+   * the exec it exists to prevent.
+   */
+  beforeSpawn?: () => void | Promise<void>;
 }
 
 /**

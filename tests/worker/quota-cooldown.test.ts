@@ -7,9 +7,15 @@ import {
   recordQuotaExhausted,
   clearQuotaCooldown,
   getQuotaCooldown,
+  checkQuotaHold,
+  touchQuotaProbe,
+  onQuotaCooldownCleared,
+  forgetQuotaCooldownsInMemoryForTesting,
+  resetQuotaCooldownListenersForTesting,
   resetQuotaCooldownsForTesting,
   QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS,
   QUOTA_PROBE_STALE_MS,
+  QUOTA_RESUME_MAX_HORIZON_MS,
 } from '../../src/shared/quota-cooldown.js';
 import {
   isObserverQuotaCooldownActive,
@@ -276,5 +282,432 @@ describe('quota cooldown breaker (#3634)', () => {
     const cleared = readObserverHealth(healthPath);
     expect(cleared === null || cleared.quotaCooldown === null).toBe(true);
     expect(isObserverQuotaCooldownActive(cleared)).toBe(false);
+  });
+});
+
+/**
+ * Provider-stated resume times (plan 3.5, M3).
+ *
+ * A Codex refusal says "Try again at 4:35 PM"; the fixed 30-minute window is
+ * the guess we make when nothing said anything. These cover the new behaviour
+ * AND, just as importantly, that the old behaviour is bit-for-bit intact for
+ * every provider that states no time — claude, gemini, openrouter and
+ * cmem-gateway never pass one, and none of them may notice this field exists.
+ */
+describe('quota cooldown resume times (M3)', () => {
+  beforeEach(() => {
+    resetQuotaCooldownsForTesting();
+  });
+
+  afterAll(() => {
+    resetQuotaCooldownsForTesting();
+    resetQuotaCooldownListenersForTesting();
+  });
+
+  const HOUR = 60 * 60_000;
+
+  it('withholds until the stated resume time, past the fixed window', () => {
+    const armedAt = Date.now();
+    const resumeAt = armedAt + 4 * HOUR;
+    recordQuotaExhausted('codex', "You've hit your usage limit", '5h', armedAt, resumeAt);
+
+    expect(getQuotaCooldown('codex')?.resumeAtMs).toBe(resumeAt);
+    // The fixed window would have re-probed here; the stated time says no.
+    expect(isQuotaCooldownActive('codex', armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS + 1)).toBe(true);
+    expect(tryAdmitQuotaProbe('codex', armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS + 1).admitted).toBe(false);
+
+    expect(isQuotaCooldownActive('codex', resumeAt - 1)).toBe(true);
+    expect(isQuotaCooldownActive('codex', resumeAt + 1)).toBe(false);
+
+    const probe = tryAdmitQuotaProbe('codex', resumeAt + 1);
+    expect(probe.admitted).toBe(true);
+    expect(probe.claimId).not.toBeNull();
+    releaseQuotaProbe('codex', probe.claimId);
+  });
+
+  it('honours a stated time SHORTER than the fixed window', () => {
+    const armedAt = Date.now();
+    const resumeAt = armedAt + 5 * 60_000;
+    recordQuotaExhausted('codex', 'Selected model is at capacity', undefined, armedAt, resumeAt);
+
+    expect(isQuotaCooldownActive('codex', resumeAt - 1)).toBe(true);
+    // Waiting out the full 30 minutes when the provider said five is exactly
+    // the pause the resume scheduler exists to stop.
+    expect(isQuotaCooldownActive('codex', resumeAt + 1)).toBe(false);
+    expect(tryAdmitQuotaProbe('codex', resumeAt + 1).admitted).toBe(true);
+    releaseQuotaProbe('codex', getQuotaCooldown('codex')!.probeClaimId);
+  });
+
+  it('leaves claude, gemini and openrouter on the exact fixed-window arithmetic', () => {
+    const healthPath = join(paths.dataDir(), OBSERVER_HEALTH_FILENAME);
+    const armedAt = Date.now();
+    for (const provider of ['claude', 'gemini', 'openrouter'] as const) {
+      // The pre-M3 call shape: no resume time anywhere in it.
+      recordQuotaExhausted(provider, 'Weekly limit reached', 'weekly', armedAt);
+
+      // The field must not appear at all, so nothing downstream (the health
+      // mirror's `until`, the resume scheduler) can start reading one.
+      expect(getQuotaCooldown(provider)!.resumeAtMs).toBeUndefined();
+
+      // Observer health, which drives the session-start banner, must still
+      // read armedAt + the fixed window for these three.
+      const mirrored = readObserverHealth(healthPath)!.quotaCooldown!;
+      expect(mirrored.provider).toBe(provider);
+      expect(mirrored.until).toBe(mirrored.armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS);
+
+      const boundary = armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS;
+      // `nowMs - armedAtMs < cooldownMs`, asserted at the boundary itself:
+      // strictly-less-than, so the instant of expiry is already admitted.
+      expect(isQuotaCooldownActive(provider, boundary - 1)).toBe(true);
+      expect(isQuotaCooldownActive(provider, boundary)).toBe(false);
+      expect(tryAdmitQuotaProbe(provider, boundary - 1).admitted).toBe(false);
+      const probe = tryAdmitQuotaProbe(provider, boundary);
+      expect(probe.admitted).toBe(true);
+      releaseQuotaProbe(provider, probe.claimId);
+      clearQuotaCooldown(provider);
+    }
+  });
+
+  it('keeps the caller-supplied cooldownMs authoritative when no time is stated', () => {
+    // provider-dispatch passes CMEM_FALLBACK_RETRY_MS for the gateway.
+    const armedAt = Date.now();
+    const custom = 90_000;
+    recordQuotaExhausted('cmem-gateway', 'gateway quota', undefined, armedAt);
+
+    expect(isQuotaCooldownActive('cmem-gateway', armedAt + custom - 1, custom)).toBe(true);
+    expect(isQuotaCooldownActive('cmem-gateway', armedAt + custom, custom)).toBe(false);
+    expect(tryAdmitQuotaProbe('cmem-gateway', armedAt + custom - 1, custom).admitted).toBe(false);
+    const probe = tryAdmitQuotaProbe('cmem-gateway', armedAt + custom, custom);
+    expect(probe.admitted).toBe(true);
+    releaseQuotaProbe('cmem-gateway', probe.claimId);
+  });
+
+  it('ignores a resume time at or before the arming instant', () => {
+    // "Try again later" with no parsable time must fall back to 30 minutes,
+    // never to zero — a breaker that expires the moment it arms is the
+    // per-observation request storm this module exists to stop.
+    const armedAt = Date.now();
+    for (const bogus of [armedAt, armedAt - 60_000, 0, Number.NaN, Number.POSITIVE_INFINITY]) {
+      recordQuotaExhausted('codex', 'Try again later', undefined, armedAt, bogus);
+      expect(getQuotaCooldown('codex')!.resumeAtMs).toBeUndefined();
+      expect(isQuotaCooldownActive('codex', armedAt + 1)).toBe(true);
+      expect(isQuotaCooldownActive('codex', armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS)).toBe(false);
+      clearQuotaCooldown('codex');
+    }
+  });
+
+  it('clamps an absurd resume time to the trust horizon instead of wedging shut', () => {
+    const armedAt = Date.now();
+    recordQuotaExhausted('codex', 'misparsed date', undefined, armedAt, armedAt + 400 * 24 * HOUR);
+
+    expect(getQuotaCooldown('codex')!.resumeAtMs).toBe(armedAt + QUOTA_RESUME_MAX_HORIZON_MS);
+    expect(isQuotaCooldownActive('codex', armedAt + QUOTA_RESUME_MAX_HORIZON_MS + 1)).toBe(false);
+  });
+
+  it('carries a still-future resume time across a re-arm that states none', () => {
+    // The prose/abort path arms with a generic message and no time. Without
+    // the carry-forward it would restamp "back at 4:35 PM" into "another 30
+    // minutes from now", every time a session hit the breaker.
+    const armedAt = Date.now();
+    const resumeAt = armedAt + 4 * HOUR;
+    recordQuotaExhausted('codex', "You've hit your usage limit", '5h', armedAt, resumeAt);
+
+    const reArmed = recordQuotaExhausted(
+      'codex',
+      'Provider reported the inference allowance exhausted',
+      undefined,
+      armedAt + 10 * 60_000,
+    );
+
+    expect(reArmed.resumeAtMs).toBe(resumeAt);
+    expect(isQuotaCooldownActive('codex', resumeAt - 1)).toBe(true);
+    expect(isQuotaCooldownActive('codex', resumeAt + 1)).toBe(false);
+  });
+
+  it('drops a resume time that has already passed when re-arming', () => {
+    // The allowance returned, the probe went out, Codex refused again without
+    // naming a new time. Carrying the stale time would leave the breaker
+    // expired on arrival.
+    const armedAt = Date.now();
+    const resumeAt = armedAt + HOUR;
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt, resumeAt);
+
+    const reArmedAt = resumeAt + 1_000;
+    const reArmed = recordQuotaExhausted('codex', 'Usage limit reached', undefined, reArmedAt);
+
+    expect(reArmed.resumeAtMs).toBeUndefined();
+    expect(isQuotaCooldownActive('codex', reArmedAt + 1)).toBe(true);
+    expect(isQuotaCooldownActive('codex', reArmedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS)).toBe(false);
+  });
+
+  it('lets an explicitly stated time override the carried one', () => {
+    const armedAt = Date.now();
+    recordQuotaExhausted('codex', 'first', undefined, armedAt, armedAt + 4 * HOUR);
+
+    const reArmed = recordQuotaExhausted('codex', 'second', undefined, armedAt, armedAt + 2 * HOUR);
+
+    expect(reArmed.resumeAtMs).toBe(armedAt + 2 * HOUR);
+  });
+
+  it('survives a restart with the stated time intact', () => {
+    const armedAt = Date.now();
+    const resumeAt = armedAt + 4 * HOUR;
+    recordQuotaExhausted('codex', "You've hit your usage limit", '5h', armedAt, resumeAt);
+
+    // Same shape as a fresh process: the Map is empty and the latch is down,
+    // so the next read hydrates from the ledger on disk.
+    forgetQuotaCooldownsInMemoryForTesting();
+
+    expect(getQuotaCooldown('codex')?.resumeAtMs).toBe(resumeAt);
+    expect(isQuotaCooldownActive('codex', armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS + 1)).toBe(true);
+    expect(isQuotaCooldownActive('codex', resumeAt + 1)).toBe(false);
+    // Never restored: the process that could have held a claim is gone.
+    expect(getQuotaCooldown('codex')?.probeInFlightSinceMs).toBeNull();
+  });
+
+  it('mirrors the stated resume time into observer-health as the real `until`', () => {
+    const healthPath = join(paths.dataDir(), OBSERVER_HEALTH_FILENAME);
+    const armedAt = Date.now();
+    const resumeAt = armedAt + 4 * HOUR;
+    recordQuotaExhausted('codex', "You've hit your usage limit", '5h', armedAt, resumeAt);
+
+    const armed = readObserverHealth(healthPath)!;
+    expect(armed.quotaCooldown!.provider).toBe('codex');
+    // The banner counts down to this. Printing armedAt + 30 minutes told the
+    // user the observer was back in half an hour when it was four hours away.
+    expect(armed.quotaCooldown!.until).toBe(resumeAt);
+    expect(isObserverQuotaCooldownActive(armed)).toBe(true);
+
+    clearQuotaCooldown('codex');
+  });
+});
+
+describe('quota cooldown clear listeners (M3 drain-on-clear)', () => {
+  beforeEach(() => {
+    resetQuotaCooldownsForTesting();
+    resetQuotaCooldownListenersForTesting();
+  });
+
+  afterAll(() => {
+    resetQuotaCooldownsForTesting();
+    resetQuotaCooldownListenersForTesting();
+  });
+
+  it('announces the provider whose armed breaker was cleared', () => {
+    const seen: string[] = [];
+    const off = onQuotaCooldownCleared(provider => seen.push(provider));
+
+    recordQuotaExhausted('codex', "You've hit your usage limit");
+    expect(seen).toEqual([]);
+
+    clearQuotaCooldown('codex');
+    expect(seen).toEqual(['codex']);
+
+    off();
+  });
+
+  it('stays silent when nothing was armed', () => {
+    // ResponseProcessor clears the breaker on EVERY successful store. For a
+    // healthy provider that is once per observation; announcing those would
+    // make the resume scheduler fan out across every session, per observation.
+    const seen: string[] = [];
+    const off = onQuotaCooldownCleared(provider => seen.push(provider));
+
+    clearQuotaCooldown('claude');
+    clearQuotaCooldown('claude');
+
+    expect(seen).toEqual([]);
+    off();
+  });
+
+  it('still clears a stale health-file window when nothing is armed in memory', () => {
+    // The unannounced path must keep doing its other job: this is the call
+    // that drops a cooldown a previous process left in observer-health.json.
+    const healthPath = join(paths.dataDir(), OBSERVER_HEALTH_FILENAME);
+    recordQuotaExhausted('claude', 'Weekly limit reached');
+    expect(readObserverHealth(healthPath)?.quotaCooldown).not.toBeNull();
+
+    clearQuotaCooldown('claude');
+    clearQuotaCooldown('claude');
+
+    const cleared = readObserverHealth(healthPath);
+    expect(cleared === null || cleared.quotaCooldown === null).toBe(true);
+  });
+
+  it('unsubscribes, and one throwing listener does not stop the others or the clear', () => {
+    const seen: string[] = [];
+    const offGone = onQuotaCooldownCleared(() => seen.push('gone'));
+    offGone();
+    const offBad = onQuotaCooldownCleared(() => { throw new Error('subscriber blew up'); });
+    const offGood = onQuotaCooldownCleared(provider => seen.push(`good:${provider}`));
+
+    recordQuotaExhausted('codex', "You've hit your usage limit");
+    expect(() => clearQuotaCooldown('codex')).not.toThrow();
+
+    expect(seen).toEqual(['good:codex']);
+    expect(getQuotaCooldown('codex')).toBeNull();
+
+    offBad();
+    offGood();
+  });
+});
+
+/**
+ * `checkQuotaHold` — the repeatable, read-only check a generator that is
+ * ALREADY RUNNING makes before each call (plan 3.5).
+ */
+describe('checkQuotaHold (M3 in-flight circuit)', () => {
+  beforeEach(() => {
+    resetQuotaCooldownsForTesting();
+  });
+
+  afterAll(() => {
+    resetQuotaCooldownsForTesting();
+  });
+
+  it('does not hold when no breaker is armed', () => {
+    expect(checkQuotaHold('codex')).toEqual({ held: false, reason: null, state: null, resumeAtMs: null });
+  });
+
+  it('holds inside the window and reports when it lifts', () => {
+    const armedAt = Date.now();
+    const resumeAt = armedAt + 4 * 60 * 60_000;
+    recordQuotaExhausted('codex', "You've hit your usage limit", '5h', armedAt, resumeAt);
+
+    const hold = checkQuotaHold('codex', null, armedAt + 1_000);
+    expect(hold.held).toBe(true);
+    expect(hold.reason).toBe('cooldown');
+    expect(hold.resumeAtMs).toBe(resumeAt);
+    expect(hold.state?.message).toBe("You've hit your usage limit");
+  });
+
+  it('falls back to the fixed window for a provider that stated no time', () => {
+    const armedAt = Date.now();
+    recordQuotaExhausted('claude', 'Weekly limit reached', undefined, armedAt);
+
+    expect(checkQuotaHold('claude', null, armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS - 1).held).toBe(true);
+    expect(checkQuotaHold('claude', null, armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS).held).toBe(false);
+  });
+
+  it('never claims the probe — it is read-only', () => {
+    const armedAt = Date.now();
+    recordQuotaExhausted('claude', 'Weekly limit reached', undefined, armedAt);
+    const afterExpiry = armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS + 1;
+
+    checkQuotaHold('claude', null, afterExpiry);
+    checkQuotaHold('claude', null, afterExpiry);
+
+    expect(getQuotaCooldown('claude')?.probeInFlightSinceMs).toBeNull();
+    expect(getQuotaCooldown('claude')?.probeClaimId).toBeNull();
+    // Still the caller that would have been admitted first.
+    const probe = tryAdmitQuotaProbe('claude', afterExpiry);
+    expect(probe.admitted).toBe(true);
+    releaseQuotaProbe('claude', probe.claimId);
+  });
+
+  it('holds everyone except the generator that owns the in-flight probe', () => {
+    // This is the case isQuotaCooldownActive cannot express: once the window
+    // elapses it answers false for every session, including the ones the
+    // single-probe rule is withholding.
+    const armedAt = Date.now();
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt);
+    const afterExpiry = armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS + 1;
+
+    const probe = tryAdmitQuotaProbe('codex', afterExpiry);
+    expect(probe.admitted).toBe(true);
+    expect(isQuotaCooldownActive('codex', afterExpiry)).toBe(false);
+
+    // The prober itself: it IS the one allowed call.
+    expect(checkQuotaHold('codex', probe.claimId, afterExpiry).held).toBe(false);
+    // Another session, and a generator that started before any breaker existed
+    // and so carries no claim at all.
+    const other = checkQuotaHold('codex', (probe.claimId ?? 0) + 1, afterExpiry);
+    expect(other.held).toBe(true);
+    expect(other.reason).toBe('probe_in_flight');
+    expect(checkQuotaHold('codex', null, afterExpiry).held).toBe(true);
+
+    releaseQuotaProbe('codex', probe.claimId);
+    // Released: the next caller is free again.
+    expect(checkQuotaHold('codex', null, afterExpiry).held).toBe(false);
+  });
+
+  it('lifts once an abandoned probe goes stale, matching tryAdmitQuotaProbe', () => {
+    const armedAt = Date.now();
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt);
+    const afterExpiry = armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS + 1;
+
+    const abandoned = tryAdmitQuotaProbe('codex', afterExpiry);
+    expect(checkQuotaHold('codex', null, afterExpiry + QUOTA_PROBE_STALE_MS - 1).held).toBe(true);
+    expect(checkQuotaHold('codex', null, afterExpiry + QUOTA_PROBE_STALE_MS + 1).held).toBe(false);
+
+    releaseQuotaProbe('codex', abandoned.claimId);
+    clearQuotaCooldown('codex');
+  });
+
+  it('is scoped per provider', () => {
+    recordQuotaExhausted('codex', "You've hit your usage limit");
+
+    expect(checkQuotaHold('codex').held).toBe(true);
+    expect(checkQuotaHold('claude').held).toBe(false);
+    expect(checkQuotaHold('openrouter').held).toBe(false);
+  });
+});
+
+describe('touchQuotaProbe (M3: a live probe keeps its claim)', () => {
+  beforeEach(() => {
+    resetQuotaCooldownsForTesting();
+  });
+
+  afterAll(() => {
+    resetQuotaCooldownsForTesting();
+  });
+
+  it("refreshes the caller's own claim, so a slow but live probe is not taken over", () => {
+    const armedAt = Date.now();
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt);
+    const claimedAt = armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS + 1;
+    const probe = tryAdmitQuotaProbe('codex', claimedAt);
+    expect(probe.admitted).toBe(true);
+
+    // Still spending four minutes in: the circuit lets it through and touches.
+    const stillWorking = claimedAt + QUOTA_PROBE_STALE_MS - 60_000;
+    expect(touchQuotaProbe('codex', probe.claimId, stillWorking)).toBe(true);
+    expect(getQuotaCooldown('codex')?.probeInFlightSinceMs).toBe(stillWorking);
+
+    // Where the original claim would have gone stale, nobody may take over.
+    const takeover = tryAdmitQuotaProbe('codex', claimedAt + QUOTA_PROBE_STALE_MS + 1);
+    expect(takeover.admitted).toBe(false);
+    expect(checkQuotaHold('codex', null, claimedAt + QUOTA_PROBE_STALE_MS + 1).held).toBe(true);
+
+    releaseQuotaProbe('codex', probe.claimId);
+  });
+
+  it("never touches someone else's claim, a released claim, or a missing breaker", () => {
+    expect(touchQuotaProbe('codex', 1)).toBe(false);
+
+    const armedAt = Date.now();
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt);
+    const claimedAt = armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS + 1;
+    const probe = tryAdmitQuotaProbe('codex', claimedAt);
+
+    expect(touchQuotaProbe('codex', null, claimedAt + 1_000)).toBe(false);
+    expect(touchQuotaProbe('codex', (probe.claimId ?? 0) + 1, claimedAt + 1_000)).toBe(false);
+    expect(getQuotaCooldown('codex')?.probeInFlightSinceMs).toBe(claimedAt);
+
+    releaseQuotaProbe('codex', probe.claimId);
+    expect(touchQuotaProbe('codex', probe.claimId, claimedAt + 2_000)).toBe(false);
+    expect(getQuotaCooldown('codex')?.probeInFlightSinceMs).toBeNull();
+  });
+
+  it('never moves the claim instant backwards', () => {
+    const armedAt = Date.now();
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt);
+    const claimedAt = armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS + 1;
+    const probe = tryAdmitQuotaProbe('codex', claimedAt);
+
+    expect(touchQuotaProbe('codex', probe.claimId, claimedAt - 10_000)).toBe(true);
+    expect(getQuotaCooldown('codex')?.probeInFlightSinceMs).toBe(claimedAt);
+
+    releaseQuotaProbe('codex', probe.claimId);
   });
 });

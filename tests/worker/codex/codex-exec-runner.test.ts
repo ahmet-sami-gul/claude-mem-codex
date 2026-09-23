@@ -647,6 +647,53 @@ describe('ExecTransport pre-spawn failures', () => {
    * generator's own exec). Every other purpose IS the generator's own turn and
    * must stay reapable.
    */
+  // The provider's quota circuit runs again here, after the (possibly long)
+  // wait for a pool slot: a refusal must release the slot and spawn nothing.
+  posixIt('beforeSpawn runs once the slot is granted; a refusal there spawns nothing and releases the slot', async () => {
+    const f = fake({});
+    const counts = countingInternals();
+    const slotsWhenChecked: number[] = [];
+    const refusal = new ClassifiedProviderError('Codex quota cooldown is active: usage limit', {
+      kind: 'quota_exhausted',
+      cause: null,
+      code: 'codex_quota_cooldown',
+    });
+
+    const error = await expectRejection(transport(f).oneShot('prompt', ctxFor(f, {
+      beforeSpawn: () => {
+        slotsWhenChecked.push(counts.slots);
+        throw refusal;
+      },
+    })));
+
+    expect(error).toBe(refusal);
+    expect(slotsWhenChecked).toEqual([1]);
+    expect(counts).toEqual({ slots: 1, spawns: 0, releases: 1 });
+  });
+
+  posixIt('an async beforeSpawn is awaited before the spawn, and a pass lets it proceed', async () => {
+    const f = fake({});
+    const counts = countingInternals();
+    const order: string[] = [];
+    _internals.spawnSdkProcess = (() => {
+      order.push('spawn');
+      counts.spawns += 1;
+      return null;
+    }) as typeof _internals.spawnSdkProcess;
+
+    const error = (await expectRejection(transport(f).oneShot('prompt', ctxFor(f, {
+      beforeSpawn: async () => {
+        await Promise.resolve();
+        order.push('check');
+      },
+    })))) as ClassifiedProviderError;
+
+    // The null spawn is this test's stand-in for "it got as far as spawning".
+    expect(error.code).toBe('codex_spawn_failed');
+    expect(order).toEqual(['check', 'spawn']);
+    expect(counts.releases).toBe(counts.slots);
+  });
+
   posixIt('registers only the Telegram wrap-up as an aux process', async () => {
     const f = fake({});
     const roles: Array<unknown> = [];

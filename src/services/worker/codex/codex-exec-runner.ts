@@ -442,6 +442,13 @@ export class ExecTransport implements CodexTransport {
       if (signal?.aborted) {
         throw createCodexAbortError('Codex exec aborted before spawn');
       }
+      // Inside the try on purpose: a refusal here still releases the slot.
+      if (ctx.beforeSpawn) {
+        await ctx.beforeSpawn();
+        if (signal?.aborted) {
+          throw createCodexAbortError('Codex exec aborted before spawn');
+        }
+      }
       this.assertExecutable(ctx.binaryPath);
       try {
         handle = _internals.spawnSdkProcess(ctx.sessionDbId, {

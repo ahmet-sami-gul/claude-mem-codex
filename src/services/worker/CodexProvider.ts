@@ -21,8 +21,9 @@
  *     (`adoptForeignMemorySessionId`), so switching a live session onto Codex
  *     cannot cascade a re-key storm through the observation rows.
  *
- * NOT here yet, by design (each has a named seam below): the quota circuit and
- * the local 5-hour exec budget (M3/M4), batching (M4).
+ * The quota circuit is now installed on that seam (M3,
+ * `codexQuotaCircuitPreflight`). NOT here yet, by design: the local 5-hour exec
+ * budget and batching (M4).
  */
 
 import { DatabaseManager } from './DatabaseManager.js';
@@ -41,6 +42,7 @@ import {
 import type { WorkerRef } from './agents/index.js';
 import type { FieldCompressor } from './field-optimizer.js';
 import { findCodexExecutable } from '../../shared/find-codex-executable.js';
+import { checkQuotaHold, touchQuotaProbe } from '../../shared/quota-cooldown.js';
 import {
   codexViolationTracker,
   ExecTransport,
@@ -57,6 +59,7 @@ import type {
   TurnResult,
 } from './codex/codex-transport.js';
 import { renderCodexPromptFromConversation } from './codex/codex-prompt.js';
+import type { CodexReadinessSnapshot, CodexReadinessSource } from './session/codex-readiness-gate.js';
 import {
   CODEX_DEFAULT_MODEL,
   CODEX_DEFAULT_REASONING_EFFORT,
@@ -67,6 +70,7 @@ import {
 } from './codex/codex-invocation.js';
 import {
   getCodexAuthMethodDescription,
+  getCodexLockdownFingerprint,
   getCodexLockdownStatus,
   verifyCodexLockdown,
   type CodexLockdownResult,
@@ -131,25 +135,114 @@ export interface CodexPreflightContext {
  * ClassifiedProviderError (quota_exhausted with a retryAfterMs / resumeAtMs) to
  * refuse the call without paying for it.
  *
- * The default is deliberately nothing at all — M2 ships the provider, not the
- * accounting — so the only behaviour it can cause today is "the call proceeds".
+ * The default is `codexQuotaCircuitPreflight` (M3). M4 composes the local
+ * 5-hour exec budget with it rather than replacing it.
+ *
+ * It runs TWICE per call: once before the prompt is rendered, and again after
+ * the transport's pool slot is granted, immediately before the spawn
+ * (`CodexTurnContext.beforeSpawn`). So it must be a check, not a reservation:
+ * anything it counts has to be counted where the exec actually happens, or
+ * every call would be counted twice.
  */
 export type CodexPreflightCheck = (config: CodexConfig, ctx: CodexPreflightContext) => void | Promise<void>;
 
-const NO_PREFLIGHT: CodexPreflightCheck = () => {};
+/**
+ * The codes the quota circuit stamps on its OWN refusals, as opposed to a
+ * refusal Codex itself returned.
+ *
+ * The route has to tell the two apart. Both are `quota_exhausted`, both abort
+ * the generator through the shared policy, and both land in the route's quota
+ * branch — but only a real refusal is news. Re-arming the breaker from a
+ * circuit refusal would restamp `armedAtMs` (and, for a refusal that stated no
+ * time, push the fixed window out by another 30 minutes) every time a running
+ * generator bumped into the hold, so on a busy machine the single probe would
+ * never be allowed out. It would also book a fresh observer failure for a pause
+ * the ledger already shows.
+ */
+export const CODEX_QUOTA_CIRCUIT_CODES = Object.freeze({
+  cooldown: 'codex_quota_cooldown',
+  probeInFlight: 'codex_quota_probe_in_flight',
+} as const);
+
+/** True for a refusal the circuit raised itself (see CODEX_QUOTA_CIRCUIT_CODES). */
+export function isCodexQuotaCircuitRefusal(error: unknown): boolean {
+  return isClassified(error)
+    && (error.code === CODEX_QUOTA_CIRCUIT_CODES.cooldown || error.code === CODEX_QUOTA_CIRCUIT_CODES.probeInFlight);
+}
+
+/**
+ * Refuse a Codex call the quota breaker is withholding, before an exec exists
+ * to pay for (plan 3.5, "çalışan generator'larda kota kontrolü").
+ *
+ * The route's `tryAdmitQuotaProbe` only runs when a generator STARTS. A Plus
+ * allowance runs out mid-session, and every generator already running at that
+ * moment carries on spawning `codex exec` — one paid subprocess per captured
+ * tool call — until each has earned its own "You've hit your usage limit". This
+ * is the second gate, at the only place that repeats per call.
+ *
+ * `session.quotaProbeClaimId` is what keeps the single post-cooldown probe
+ * working: the one generator holding the claim must be allowed through (it IS
+ * the probe), and everyone else must not ride along behind it. A generator
+ * admitted while no breaker existed holds a null claim and is withheld with
+ * the rest, which is correct — the breaker armed after it started.
+ *
+ * Read-only against the breaker: it never claims and never arms. Arming is the
+ * route's job, from a real refusal with the provider's own message and resume
+ * time.
+ */
+export const codexQuotaCircuitPreflight: CodexPreflightCheck = (_config, ctx): void => {
+  const claimId = ctx.session?.quotaProbeClaimId ?? null;
+  const hold = checkQuotaHold('codex', claimId);
+  if (!hold.held) {
+    // The single probe is being let through on its own claim: it is alive and
+    // spending, so keep its claim fresh. Without this a slow but healthy probe
+    // (an init exec plus an observation exec, each up to the Codex timeout)
+    // outlives QUOTA_PROBE_STALE_MS and a second paid probe takes it over
+    // while the first is still running. A no-op for every other caller.
+    touchQuotaProbe('codex', claimId);
+    return;
+  }
+
+  const resumeAtMs = hold.resumeAtMs;
+  const retryAfterMs = resumeAtMs === null ? undefined : Math.max(0, resumeAtMs - Date.now());
+  // The provider's own words, not ours: the user is shown the reason Codex
+  // gave ("weekly limit reached", "out of credits"), because that is what tells
+  // them whether to wait or to change plan.
+  const stated = hold.state?.message;
+  const message = hold.reason === 'probe_in_flight'
+    ? 'Codex quota probe is already in flight for another session; not spending a second exec on it'
+    : `Codex quota cooldown is active: ${stated ?? 'the Codex allowance is spent'}`;
+
+  throw new ClassifiedProviderError(message, {
+    kind: 'quota_exhausted',
+    cause: new Error(`codex quota hold (${hold.reason ?? 'unknown'})`),
+    code: hold.reason === 'probe_in_flight' ? CODEX_QUOTA_CIRCUIT_CODES.probeInFlight : CODEX_QUOTA_CIRCUIT_CODES.cooldown,
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    action: 'The memory observer is waiting out the Codex allowance; it resumes on its own. No action needed unless it never does.',
+  });
+};
 
 export interface CodexProviderOptions {
   /** Defaults to the stateless `codex exec --ephemeral --json` transport. */
   transport?: CodexTransport;
-  /** M3/M4 quota-circuit + local-budget seam; defaults to no check at all. */
+  /** M3/M4 quota-circuit + local-budget seam; defaults to `codexQuotaCircuitPreflight`. */
   preflight?: CodexPreflightCheck;
   /**
    * Starts (or joins) the lockdown self-check for a binary. The default fires
    * `verifyCodexLockdown` and does not await it: the check is single-flight and
    * cached inside that module, never rejects, and only runs model-free probes.
-   * M3 replaces the caller of this with the non-blocking boot gate.
+   * Since M3 the route's non-blocking codex gate (session/codex-readiness-gate)
+   * is what normally starts the check, through `verifyLockdown`; this remains
+   * the provider's own fallback when a start reaches `isConfigured` unverified.
    */
   startSelfCheck?: (binaryPath: string, options: VerifyCodexLockdownOptions) => void;
+  /**
+   * Runs (or joins) the lockdown self-check and resolves with its verdict — the
+   * awaited counterpart of `startSelfCheck`, used by the route's codex gate via
+   * `verifyLockdown`. Defaults to `verifyCodexLockdown`, which is single-flight,
+   * never rejects and only runs the four model-free probes. Test seam.
+   */
+  runSelfCheck?: (binaryPath: string, options: VerifyCodexLockdownOptions) => Promise<CodexLockdownResult>;
 }
 
 /** One warning per distinct bad value, so a wrong setting is not logged per call. */
@@ -273,7 +366,7 @@ function codexPurpose(purpose: ProviderQueryContext['purpose'] | undefined): Cod
   }
 }
 
-export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> {
+export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> implements CodexReadinessSource {
   protected readonly providerName = 'Codex';
   protected readonly syntheticIdPrefix = 'codex';
   /**
@@ -295,6 +388,7 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> {
   private readonly transport: CodexTransport;
   private readonly preflight: CodexPreflightCheck;
   private readonly startSelfCheck: (binaryPath: string, options: VerifyCodexLockdownOptions) => void;
+  private readonly runSelfCheck: (binaryPath: string, options: VerifyCodexLockdownOptions) => Promise<CodexLockdownResult>;
 
   constructor(dbManager: DatabaseManager, sessionManager: SessionManager, options: CodexProviderOptions = {}) {
     super(dbManager, sessionManager);
@@ -303,13 +397,14 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> {
         CLAUDE_MEM_CODEX_HOME: SettingsDefaultsManager.loadFromFile(paths.settings()).CLAUDE_MEM_CODEX_HOME,
       }),
     });
-    this.preflight = options.preflight ?? NO_PREFLIGHT;
+    this.preflight = options.preflight ?? codexQuotaCircuitPreflight;
     this.startSelfCheck = options.startSelfCheck ?? ((binaryPath, verifyOptions) => {
       // Fire and forget: verifyCodexLockdown is single-flight, caches its
       // result per binary fingerprint, and never rejects. Nothing awaits it,
       // so no ingest is blocked on a subprocess probe.
       void verifyCodexLockdown(binaryPath, verifyOptions);
     });
+    this.runSelfCheck = options.runSelfCheck ?? verifyCodexLockdown;
   }
 
   /**
@@ -440,6 +535,53 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> {
     const resolved = config ?? this.getConfig();
     if (!resolved.binaryPath) return null;
     return getCodexLockdownStatus(resolved.binaryPath, this.selfCheckOptions(resolved));
+  }
+
+  /**
+   * The codex gate's cheap question (M3, plan 3.5): is this observer ready, and
+   * if not, why? Never spawns and never starts a check — it reads the memoized
+   * binary resolution and the self-check cache, which is what lets the gate ask
+   * it on the ingest path without blocking ingest on a subprocess.
+   */
+  readinessSnapshot(): CodexReadinessSnapshot {
+    const config = this.getConfig();
+    if (!config.binaryPath) {
+      return { state: 'binary_missing', message: config.binaryError ?? 'the Codex CLI binary could not be resolved' };
+    }
+    const status = this.lockdownStatus(config);
+    if (status === null) return { state: 'unverified' };
+    if (status.state === 'pending') return { state: 'pending' };
+    if (status.state === 'passed') return { state: 'passed' };
+    return { state: 'failed', result: status };
+  }
+
+  /**
+   * What the self-check verdict for the configured binary would be keyed on
+   * now (binary, login, codex settings), or null without a binary. The gate
+   * compares it with the key its last canary ran under: once an exec-time
+   * problem has used up its automatic re-checks, a changed setup is what earns
+   * it new ones. Never spawns.
+   */
+  readinessFingerprint(): string | null {
+    const config = this.getConfig();
+    if (!config.binaryPath) return null;
+    return getCodexLockdownFingerprint(config.binaryPath, this.selfCheckOptions(config));
+  }
+
+  /**
+   * Start (or join) the lockdown self-check for the configured binary and
+   * resolve with its verdict; null when there is no binary to check. `force`
+   * re-runs a check whose failed or passed verdict is still cached — the
+   * gate's re-check after a setup/login backoff expires. Model-free: the four
+   * probes never reach the user's plan.
+   */
+  verifyLockdown(options: { force?: boolean } = {}): Promise<CodexLockdownResult | null> {
+    const config = this.getConfig();
+    if (!config.binaryPath) return Promise.resolve(null);
+    return this.runSelfCheck(config.binaryPath, {
+      ...this.selfCheckOptions(config),
+      ...(options.force ? { force: true } : {}),
+    });
   }
 
   /**
@@ -607,7 +749,9 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> {
     }
 
     try {
-      // (1)+(2) quota circuit and local budget — no-ops until M3/M4 install one.
+      // (1) the quota circuit (M3), (2) the local 5-hour exec budget (M4).
+      // Deliberately the FIRST thing after the binary check and before the
+      // prompt is rendered: every statement past this point costs an exec.
       await this.preflight(config, { sessionDbId, purpose, ...(session ? { session } : {}) });
     } catch (error: unknown) {
       this.rememberFailure(session, error);
@@ -617,6 +761,7 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> {
     // The base class passes a signal only for the bounded field-compression
     // call; every other call is cancelled through the session's own controller.
     const abortSignal = signal ?? session?.abortController.signal;
+    const preflightContext: CodexPreflightContext = { sessionDbId, purpose, ...(session ? { session } : {}) };
     const turnContext: CodexTurnContext = {
       sessionDbId,
       purpose,
@@ -627,6 +772,15 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> {
       timeoutMs: config.timeoutMs,
       ...(abortSignal ? { abortSignal } : {}),
       ...(session ? { contentSessionId: session.contentSessionId, project: session.project } : {}),
+      // The same check again, once the pool slot is granted and immediately
+      // before the spawn. The check above ran BEFORE the transport parked this
+      // turn for a slot, and that park can last indefinitely (#2756): when the
+      // allowance runs out while several turns are queued, every one of them
+      // has already passed the circuit, and without this each would spawn its
+      // own exec and earn its own usage-limit refusal the moment a slot frees
+      // — the per-call storm the circuit exists to stop. A throw here comes
+      // back out of oneShot with the slot released and nothing spawned.
+      beforeSpawn: () => this.preflight(config, preflightContext),
     };
 
     let result: TurnResult;

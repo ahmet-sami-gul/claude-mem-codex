@@ -35,8 +35,11 @@
  * and "never run" are NEVER treated as passed: isCodexLockdownPassed() is
  * true only for a finished, passing check of the current fingerprint.
  *
- * Not wired into dependency-health / the codex gate yet (M3); callers read
- * the result and getCodexAuthMethodDescription().
+ * Wired in M3 through the route's codex gate (session/codex-readiness-gate.ts,
+ * via CodexProvider.verifyLockdown): the gate starts the check in the
+ * background, never awaits it on the ingest path, and turns a failed verdict
+ * into a codex_cli dependency record plus an observer-health record. Status
+ * readers use getCodexAuthMethodDescription().
  */
 
 import { existsSync, realpathSync, statSync, type Stats } from 'fs';
@@ -808,6 +811,22 @@ export function getCodexLockdownStatus(
   const key = currentKey(binaryPath, options);
   if (key === null) return null;
   return inFlight.get(key)?.placeholder ?? freshCompleted(key, Date.now()) ?? null;
+}
+
+/**
+ * The key a verdict for `binaryPath` would be cached under right now: the
+ * binary's realpath, mtime and size, the codex settings the check depends on,
+ * and the auth.json fingerprint. It changes exactly when a re-check could
+ * reach a different verdict — a new binary, a new login, changed settings —
+ * and, unlike the cache lookup, not when a verdict merely ages out. Null when
+ * the binary cannot be fingerprinted. Reads only (a realpath and three stats);
+ * never spawns.
+ */
+export function getCodexLockdownFingerprint(
+  binaryPath: string,
+  options: VerifyCodexLockdownOptions = {},
+): string | null {
+  return currentKey(binaryPath, options);
 }
 
 /** True only for a finished, passing check of the current fingerprint. Pending / never run is false. */

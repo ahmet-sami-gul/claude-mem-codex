@@ -16,6 +16,10 @@ import {
   describeDuration,
   scrubErrorMessage,
   OBSERVER_UNHEALTHY_FAILURE_THRESHOLD,
+  OBSERVER_GATED_FAILURE_ALERT_THRESHOLD,
+  observerAlertThreshold,
+  recordObserverRecovered,
+  isScheduledResumeProvider,
   type ObserverHealthState,
 } from '../src/shared/observer-health.ts';
 import { QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS } from '../src/shared/quota-cooldown.ts';
@@ -428,6 +432,317 @@ describe('renderObserverQuotaCooldownNotice', () => {
     expect(notice).toContain('Restarting will NOT help');
     expect(notice).toContain('Do NOT restart the worker');
     expect(notice).not.toContain(workerRestartUrl());
+  });
+});
+
+describe('failures the worker will not retry on its own (M3, plan 3.6 (b))', () => {
+  const nowMs = 1_754_700_000_000 + 10 * 60_000;
+
+  function gatedLoginFailure(overrides: Partial<ObserverHealthState> = {}): ObserverHealthState {
+    return unhealthyState({
+      consecutiveFailures: 1,
+      lastErrorProvider: 'codex',
+      lastErrorKind: 'auth_invalid',
+      lastErrorCode: 'codex_auth_invalid',
+      lastErrorMessage: 'Codex lockdown self-check failed at the login_status step: Codex is not logged in',
+      lastErrorAction: 'Run `codex login` and sign in with the ChatGPT account whose plan should run the memory observer.',
+      lastErrorAlertThreshold: OBSERVER_GATED_FAILURE_ALERT_THRESHOLD,
+      lastErrorAwaitingUserFix: true,
+      ...overrides,
+    });
+  }
+
+  it('alerts at the first occurrence when the recorder says the gate stopped retrying', () => {
+    recordObserverFailure('codex', {
+      message: 'Codex is not logged in',
+      kind: 'auth_invalid',
+      action: 'Run `codex login`.',
+      alertThreshold: OBSERVER_GATED_FAILURE_ALERT_THRESHOLD,
+      awaitingUserFix: true,
+    }, healthPath);
+    const state = readObserverHealth(healthPath)!;
+    expect(state.consecutiveFailures).toBe(1);
+    expect(state.lastErrorAlertThreshold).toBe(1);
+    expect(state.lastErrorAwaitingUserFix).toBe(true);
+    expect(isObserverUnhealthy(state)).toBe(true);
+  });
+
+  it('keeps the default of three for every other failure, including a Claude auth failure', () => {
+    recordObserverFailure('claude', { message: 'invalid x-api-key', kind: 'auth_invalid' }, healthPath);
+    recordObserverFailure('claude', { message: 'invalid x-api-key', kind: 'auth_invalid' }, healthPath);
+    expect(isObserverUnhealthy(readObserverHealth(healthPath))).toBe(false);
+    recordObserverFailure('claude', { message: 'invalid x-api-key', kind: 'auth_invalid' }, healthPath);
+    expect(isObserverUnhealthy(readObserverHealth(healthPath))).toBe(true);
+  });
+
+  it('does not carry the lowered threshold over to the next, unrelated failure', () => {
+    recordObserverFailure('codex', { message: 'not logged in', kind: 'auth_invalid', alertThreshold: 1, awaitingUserFix: true }, healthPath);
+    recordObserverFailure('openrouter', 'plain boom', healthPath);
+    const state = readObserverHealth(healthPath)!;
+    expect(state.lastErrorAlertThreshold).toBeNull();
+    expect(state.lastErrorAwaitingUserFix).toBeNull();
+    expect(state.consecutiveFailures).toBe(2);
+    expect(isObserverUnhealthy(state)).toBe(false);
+  });
+
+  it('only ever lowers the threshold, whatever the ledger says', () => {
+    expect(observerAlertThreshold(unhealthyState({ lastErrorAlertThreshold: 1 }))).toBe(1);
+    expect(observerAlertThreshold(unhealthyState({ lastErrorAlertThreshold: 2 }))).toBe(2);
+    expect(observerAlertThreshold(unhealthyState({ lastErrorAlertThreshold: 50 }))).toBe(OBSERVER_UNHEALTHY_FAILURE_THRESHOLD);
+    expect(observerAlertThreshold(unhealthyState({ lastErrorAlertThreshold: 0 }))).toBe(OBSERVER_UNHEALTHY_FAILURE_THRESHOLD);
+    expect(observerAlertThreshold(unhealthyState({ lastErrorAlertThreshold: 1.5 }))).toBe(OBSERVER_UNHEALTHY_FAILURE_THRESHOLD);
+    expect(observerAlertThreshold(unhealthyState({ lastErrorAlertThreshold: null }))).toBe(OBSERVER_UNHEALTHY_FAILURE_THRESHOLD);
+    expect(observerAlertThreshold(unhealthyState())).toBe(OBSERVER_UNHEALTHY_FAILURE_THRESHOLD);
+  });
+
+  it('books a held-back streak as one record that counts all of it', () => {
+    recordObserverFailure('codex', { message: 'stream disconnected', kind: 'transient', occurrences: 3 }, healthPath);
+    expect(readObserverHealth(healthPath)!.consecutiveFailures).toBe(3);
+    recordObserverFailure('codex', { message: 'stream disconnected', kind: 'transient' }, healthPath);
+    expect(readObserverHealth(healthPath)!.consecutiveFailures).toBe(4);
+    // Garbage is one occurrence, never zero or negative.
+    recordObserverFailure('codex', { message: 'x', kind: 'transient', occurrences: -2 }, healthPath);
+    expect(readObserverHealth(healthPath)!.consecutiveFailures).toBe(5);
+  });
+
+  it('renders a fix-it banner: the error and the fix, no restart, and that a restart discards the held work', () => {
+    const warning = renderObserverHealthWarning(gatedLoginFailure(), nowMs);
+    expect(warning).toContain("can't save memories");
+    expect(warning).toContain('provider: codex');
+    expect(warning).toContain('Latest error: Codex lockdown self-check failed at the login_status step');
+    expect(warning).toContain('What to do: Run `codex login`');
+    expect(warning).toContain('no restart');
+    expect(warning).toContain('discards the held observations');
+    expect(warning).toContain('Do NOT restart the worker');
+    expect(warning).not.toContain(workerRestartUrl());
+    expect(warning).not.toContain('npx claude-mem restart');
+    // It is one problem, not a failure count.
+    expect(warning).not.toContain('in a row');
+  });
+
+  it('gives the install / CLAUDE_MEM_CODEX_PATH remedy for a missing binary', () => {
+    const warning = renderObserverHealthWarning(gatedLoginFailure({
+      lastErrorKind: 'setup_required',
+      lastErrorCode: 'codex_not_found',
+      lastErrorMessage: 'Codex CLI could not be resolved: codex not found on PATH',
+      lastErrorAction: 'Install the Codex CLI or set CLAUDE_MEM_CODEX_PATH to the absolute native codex binary in ~/.claude-mem/settings.json.',
+    }), nowMs);
+    expect(warning).toContain('What to do: Install the Codex CLI or set CLAUDE_MEM_CODEX_PATH');
+    expect(warning).not.toContain(workerRestartUrl());
+  });
+});
+
+describe('quota banners with a real resume time (M3, plan 3.6 (a) and (d))', () => {
+  const armedAt = 1_754_700_000_000;
+  const nowMs = armedAt + 5 * 60_000;
+  const until = armedAt + 4 * 60 * 60_000;
+
+  it('says the codex allowance is used up until the stated time, and that the queue is written then but lost on restart', () => {
+    const notice = renderObserverQuotaCooldownNotice(unhealthyState({
+      consecutiveFailures: 0,
+      quotaCooldown: activeCooldown({
+        provider: 'codex',
+        armedAt,
+        until,
+        window: 'quota_exhausted',
+        message: "You've hit your usage limit. Try again at 4:35 PM.",
+      }),
+    }), nowMs);
+    expect(notice).toContain('allowance on codex is used up');
+    expect(notice).toContain(new Date(until).toISOString());
+    expect(notice).toContain('about 4 hours from now');
+    expect(notice).toContain("Latest signal: You've hit your usage limit. Try again at 4:35 PM.");
+    expect(notice).toContain('stay queued');
+    expect(notice).toContain('resumes on its own');
+    expect(notice).toContain('discards the queued observations');
+    expect(notice).toContain('Restarting will NOT help');
+  });
+
+  it('names a rate limit as a rate limit rather than a spent allowance', () => {
+    const notice = renderObserverQuotaCooldownNotice(unhealthyState({
+      consecutiveFailures: 0,
+      quotaCooldown: activeCooldown({ provider: 'codex', armedAt, until, window: 'rate_limit' }),
+    }), nowMs);
+    expect(notice).toContain('rate-limited on codex');
+    expect(notice).not.toContain('allowance on codex is used up');
+  });
+
+  it('the quota failure banner says when the worker tries again while the breaker is armed', () => {
+    const warning = renderObserverHealthWarning(unhealthyState({
+      lastErrorProvider: 'codex',
+      lastErrorKind: 'quota_exhausted',
+      lastErrorMessage: "You've hit your usage limit. Try again at 4:35 PM.",
+      quotaCooldown: activeCooldown({ provider: 'codex', armedAt, until }),
+    }), nowMs);
+    expect(warning).toContain('allowance on codex is used up');
+    expect(warning).toContain('tries again on its own at');
+    expect(warning).toContain(new Date(until).toISOString());
+    expect(warning).toContain('a worker restart discards them');
+    expect(warning).not.toContain('will be remembered');
+    expect(warning).not.toContain(workerRestartUrl());
+  });
+
+  it('keeps the old quota failure wording when no breaker is armed', () => {
+    const warning = renderObserverHealthWarning(unhealthyState({
+      lastErrorKind: 'quota_exhausted',
+      quotaCooldown: null,
+    }), nowMs);
+    expect(warning).toContain('will be remembered');
+    expect(warning).not.toContain('tries again on its own');
+  });
+});
+
+describe('the other providers keep their pre-M3 quota wording (plan question 8)', () => {
+  const armedAt = 1_754_700_000_000;
+  const nowMs = armedAt + 5 * 60_000;
+
+  it('only codex is resumed on a timer, so only codex is promised a resume', () => {
+    expect(isScheduledResumeProvider('codex')).toBe(true);
+    for (const provider of ['claude', 'gemini', 'openrouter', 'cmem-gateway', null, undefined]) {
+      expect(isScheduledResumeProvider(provider)).toBe(false);
+    }
+  });
+
+  it('a Claude five_hour cooldown notice is the neutral pre-M3 sentence: the allowance is not "used up"', () => {
+    // ClaudeProvider's proactive guard pauses at 92-95% utilization: the user's
+    // own Claude Code session still works, and nothing resumes on a timer.
+    const until = armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS;
+    const notice = renderObserverQuotaCooldownNotice(unhealthyState({
+      consecutiveFailures: 0,
+      quotaCooldown: activeCooldown({ provider: 'claude', armedAt, until, window: 'five_hour', message: undefined }),
+    }), nowMs);
+
+    expect(notice).toContain(
+      `The memory observer is waiting out a quota cooldown on claude (five_hour) until ${new Date(until).toISOString()} (25 minutes from now).`,
+    );
+    expect(notice).toContain('This is not a failure. Incoming observations stay queued and will be written');
+    expect(notice).not.toContain('used up');
+    expect(notice).not.toContain('resumes on its own');
+    expect(notice).not.toContain('rate-limited');
+  });
+
+  it('the quota failure banner for a non-codex provider never promises an automatic retry, even with the breaker armed', () => {
+    const warning = renderObserverHealthWarning(unhealthyState({
+      lastErrorProvider: 'openrouter',
+      lastErrorKind: 'quota_exhausted',
+      quotaCooldown: activeCooldown({ provider: 'openrouter', armedAt, until: armedAt + QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS }),
+    }), nowMs);
+    expect(warning).toContain('will be remembered');
+    expect(warning).not.toContain('tries again on its own');
+    expect(warning).not.toContain(workerRestartUrl());
+  });
+});
+
+describe('a transport pause the worker is retrying (M3)', () => {
+  const failingSince = 1_754_700_000_000;
+  const nowMs = failingSince + 6 * 60_000;
+
+  function heldForRetry(overrides: Partial<ObserverHealthState> = {}): ObserverHealthState {
+    return unhealthyState({
+      consecutiveFailures: 3,
+      failingSinceAt: failingSince,
+      lastErrorAt: failingSince + 5 * 60_000,
+      lastErrorProvider: 'codex',
+      lastErrorKind: 'transient',
+      lastErrorCode: 'codex_transient',
+      lastErrorMessage: 'Codex stream disconnected: stream disconnected before completion',
+      lastErrorHeldForRetry: true,
+      lastErrorRetryAt: nowMs + 4 * 60_000,
+      ...overrides,
+    });
+  }
+
+  it('says the work is held and retried at a given time, and never offers the restart that would discard it', () => {
+    const warning = renderObserverHealthWarning(heldForRetry(), nowMs);
+    expect(warning).toContain("can't save memories");
+    expect(warning).toContain('provider: codex');
+    expect(warning).toContain('cannot reach its model');
+    expect(warning).toContain('failed 3 times in a row');
+    expect(warning).toContain('Latest error: Codex stream disconnected');
+    expect(warning).toContain("held in the worker's memory");
+    expect(warning).toContain(`next attempt at ${new Date(nowMs + 4 * 60_000).toISOString()} (4 minutes from now)`);
+    expect(warning).toContain('discards the');
+    expect(warning).toContain('Do NOT restart the worker');
+    expect(warning).not.toContain(workerRestartUrl());
+    expect(warning).not.toContain('npx claude-mem restart');
+    expect(warning).not.toContain('nothing from this session');
+  });
+
+  it('drops the time rather than printing one already in the past (a ledger that outlived its worker)', () => {
+    const warning = renderObserverHealthWarning(heldForRetry({ lastErrorRetryAt: nowMs - 60_000 }), nowMs);
+    expect(warning).toContain('retries');
+    expect(warning).not.toContain('next attempt at');
+    expect(warning).not.toContain(workerRestartUrl());
+  });
+
+  it('records the flag and the instant, and the next unrelated failure clears them', () => {
+    recordObserverFailure('codex', {
+      message: 'stream disconnected',
+      kind: 'transient',
+      occurrences: 3,
+      heldForRetry: true,
+      retryAt: nowMs + 60_000,
+    }, healthPath);
+    let state = readObserverHealth(healthPath)!;
+    expect(state.lastErrorHeldForRetry).toBe(true);
+    expect(state.lastErrorRetryAt).toBe(nowMs + 60_000);
+
+    recordObserverFailure('openrouter', 'plain boom', healthPath);
+    state = readObserverHealth(healthPath)!;
+    expect(state.lastErrorHeldForRetry).toBeNull();
+    expect(state.lastErrorRetryAt).toBeNull();
+    // Back to the generic outage banner, restart link included.
+    expect(renderObserverHealthWarning(state)).toContain(workerRestartUrl());
+  });
+});
+
+describe('recordObserverRecovered (M3: a fixed codex setup/login problem)', () => {
+  function bookGated(origin: 'check' | 'run', provider = 'codex'): void {
+    recordObserverFailure(provider, {
+      message: 'Codex is not logged in',
+      kind: 'auth_invalid',
+      action: 'Run `codex login`.',
+      alertThreshold: OBSERVER_GATED_FAILURE_ALERT_THRESHOLD,
+      awaitingUserFix: true,
+      origin,
+    }, healthPath);
+  }
+
+  it('clears a codex fix-it banner a passing check can disprove, without faking a store', () => {
+    bookGated('check');
+    expect(isObserverUnhealthy(readObserverHealth(healthPath))).toBe(true);
+
+    expect(recordObserverRecovered('codex', 'check', healthPath)).toBe(true);
+
+    const state = readObserverHealth(healthPath)!;
+    expect(isObserverUnhealthy(state)).toBe(false);
+    expect(state.consecutiveFailures).toBe(0);
+    expect(state.lastErrorAwaitingUserFix).toBeNull();
+    expect(state.lastSuccessAt).toBeNull();
+    // History stays for status readers.
+    expect(state.lastErrorMessage).toBe('Codex is not logged in');
+  });
+
+  it('leaves a banner a real run raised for a real run to clear', () => {
+    bookGated('run');
+    expect(recordObserverRecovered('codex', 'check', healthPath)).toBe(false);
+    expect(isObserverUnhealthy(readObserverHealth(healthPath))).toBe(true);
+
+    expect(recordObserverRecovered('codex', 'run', healthPath)).toBe(true);
+    expect(isObserverUnhealthy(readObserverHealth(healthPath))).toBe(false);
+  });
+
+  it('never touches another provider, an ordinary failure streak, or an empty ledger', () => {
+    expect(recordObserverRecovered('codex', 'run', healthPath)).toBe(false);
+
+    bookGated('check', 'openrouter');
+    expect(recordObserverRecovered('codex', 'run', healthPath)).toBe(false);
+
+    recordObserverFailure('codex', 'boom', healthPath);
+    recordObserverFailure('codex', 'boom', healthPath);
+    recordObserverFailure('codex', 'boom', healthPath);
+    expect(recordObserverRecovered('codex', 'run', healthPath)).toBe(false);
+    expect(isObserverUnhealthy(readObserverHealth(healthPath))).toBe(true);
   });
 });
 

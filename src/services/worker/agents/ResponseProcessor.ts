@@ -18,6 +18,7 @@ import { getWorkerPort } from '../../../shared/worker-utils.js';
 import { recordObserverSuccess } from '../../../shared/observer-health.js';
 import { clearQuotaCooldown } from '../../../shared/quota-cooldown.js';
 import { recycleObserverConversation } from '../session/recycle-conversation.js';
+import { notifyObserverTurnAnswered } from '../session/observer-turn-signal.js';
 import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
 import type { ActiveSession, PendingMessage } from '../../worker-types.js';
@@ -412,6 +413,26 @@ export async function processAgentResponse(
     // counter resets here too. Resetting only on a valid parse let a generation
     // that answered "idle" twice in a row trip the exhausted branch and wedge.
     session.consecutiveContextOverflows = 0;
+    // An answer of any kind also proves the transport works, so a transport
+    // streak ends here rather than at the next valid parse (M3 resume backoff).
+    session.consecutiveTransportExits = 0;
+    // A non-empty answer is also proof the model ran for this session. Empty
+    // does not count: Codex hands back empty content for a forbidden-tool
+    // attempt and for a content-policy refusal, and neither proves the
+    // observer works.
+    if (typeof text === 'string' && text.trim().length > 0) {
+      // Codex only (plan 3.5 Q8 keeps drain-on-clear codex-only): the probe
+      // that got an answer proved the allowance is back, so the breaker clears
+      // here as it does on a store. A probe whose batch the observer answered
+      // with a skip otherwise left the breaker armed — its claim then held
+      // every other session back, the banner kept reporting a spent
+      // allowance, and the rest drained one watchdog probe at a time. The
+      // other providers keep the pre-M3 rule: only a completed store clears.
+      if (session.currentProvider === 'codex') {
+        clearQuotaCooldown('codex');
+      }
+      notifyObserverTurnAnswered({ sessionDbId: session.sessionDbId, provider: session.currentProvider ?? null });
+    }
 
     // consecutiveInvalidOutputs is deliberately always 0 here (see worker-types),
     // so logging it read as "the breaker is fine" on every rejection and hid
@@ -436,6 +457,10 @@ export async function processAgentResponse(
   // counter so recycles only ever trip on *consecutive* failures.
   session.consecutiveInvalidOutputs = 0;
   session.consecutiveContextOverflows = 0;
+  session.consecutiveTransportExits = 0;
+  // The model answered with parseable output: the strongest proof a run can
+  // give short of the store itself (see observer-turn-signal).
+  notifyObserverTurnAnswered({ sessionDbId: session.sessionDbId, provider: session.currentProvider ?? null });
 
   if (!session.memorySessionId) {
     logger.warn('SDK', 'memorySessionId not yet captured; deferring storage until next round', {

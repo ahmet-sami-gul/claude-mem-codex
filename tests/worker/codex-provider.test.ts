@@ -19,10 +19,13 @@ import { ModeManager } from '../../src/services/domain/ModeManager.js';
 import { SettingsDefaultsManager, type SettingsDefaults } from '../../src/shared/SettingsDefaultsManager.js';
 import {
   CodexProvider,
+  isCodexQuotaCircuitRefusal,
   isCodexSelected,
   resetCodexConfigWarnings,
   type CodexConfig,
 } from '../../src/services/worker/CodexProvider.js';
+import { isCodexReadinessSource } from '../../src/services/worker/session/codex-readiness-gate.js';
+import { ClassifiedProviderError } from '../../src/services/worker/provider-errors.js';
 import type {
   CodexTransport,
   CodexTurnContext,
@@ -39,6 +42,17 @@ import { telemetryBuffer } from '../../src/services/telemetry/buffer.js';
 import * as findCodex from '../../src/shared/find-codex-executable.js';
 import { resetCodexExecutableCache } from '../../src/shared/find-codex-executable.js';
 import { isClassified } from '../../src/services/worker/provider-errors.js';
+import {
+  clearQuotaCooldown,
+  getQuotaCooldown,
+  isQuotaCooldownActive,
+  recordQuotaExhausted,
+  releaseQuotaProbe,
+  resetQuotaCooldownsForTesting,
+  tryAdmitQuotaProbe,
+  QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS,
+  QUOTA_PROBE_STALE_MS,
+} from '../../src/shared/quota-cooldown.js';
 import { fixturePath } from './codex/fake-codex.js';
 import type { DatabaseManager } from '../../src/services/worker/DatabaseManager.js';
 import type { SessionManager } from '../../src/services/worker/SessionManager.js';
@@ -736,5 +750,402 @@ describe('isCodexSelected', () => {
 
     settings.CLAUDE_MEM_PROVIDER = 'claude';
     expect(isCodexSelected()).toBe(false);
+  });
+});
+
+/**
+ * The quota circuit at the head of query() (plan 3.5, M3).
+ *
+ * SessionRoutes' `tryAdmitQuotaProbe` only runs when a generator STARTS. A Plus
+ * allowance runs out mid-session, and every generator already running at that
+ * moment keeps spawning `codex exec` — one paid subprocess per captured tool
+ * call — until each earns its own "You've hit your usage limit". This is the
+ * second gate, at the only place that repeats per call.
+ *
+ * The assertion that matters in every one of these is `transport.calls` being
+ * empty: a refusal that still spawned would have spent the user's plan anyway.
+ */
+describe('CodexProvider quota circuit', () => {
+  beforeEach(() => {
+    resetQuotaCooldownsForTesting();
+  });
+
+  afterEach(() => {
+    // Nested one level in, so it runs before this file's top-level teardown and
+    // before any cross-file singleton guard: the breaker is process-global and
+    // an armed codex window would gate every later codex test in this process.
+    resetQuotaCooldownsForTesting();
+  });
+
+  it('refuses without spawning while the cooldown is active', async () => {
+    const transport = new FakeTransport();
+    const provider = await readyProvider(transport, [observationMessage]);
+    const session = makeSession();
+    const armedAt = Date.now();
+    const resumeAt = armedAt + 4 * 60 * 60_000;
+    recordQuotaExhausted('codex', "You've hit your usage limit", '5h', armedAt, resumeAt);
+
+    const error = await provider.startSession(session).then(() => null, (thrown: unknown) => thrown);
+
+    expect(transport.calls).toHaveLength(0);
+    expect(isClassified(error) && error.kind).toBe('quota_exhausted');
+    expect(isClassified(error) && error.code).toBe('codex_quota_cooldown');
+    // The provider's own words, so the user can tell "wait" from "change plan".
+    expect(isClassified(error) && error.message).toContain("You've hit your usage limit");
+    // Derived from the REAL resume time, not the fixed 30-minute guess.
+    expect(isClassified(error) && error.retryAfterMs).toBeGreaterThan(3 * 60 * 60_000);
+    // Stashed before it unwinds, because the route's .finally() reads it while
+    // this call is still on the stack.
+    expect(session.lastProviderError?.kind).toBe('quota_exhausted');
+    // Buffered work is preserved rather than finalized away.
+    expect(session.abortReason).toBe('quota:quota_exhausted');
+  });
+
+  it('proceeds normally when no breaker is armed', async () => {
+    const transport = new FakeTransport([silentTurn()]);
+    const provider = await readyProvider(transport, []);
+
+    await provider.startSession(makeSession());
+
+    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['init']);
+  });
+
+  it('lets the generator that OWNS the in-flight probe spend its one exec', async () => {
+    const transport = new FakeTransport([silentTurn()]);
+    const armedAt = Date.now() - QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS - 1_000;
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt);
+    const admission = tryAdmitQuotaProbe('codex');
+    expect(admission.admitted).toBe(true);
+
+    const provider = await readyProvider(transport, []);
+    // The route hands its claim to the session; this generator IS the probe.
+    await provider.startSession(makeSession({ quotaProbeClaimId: admission.claimId }));
+
+    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['init']);
+    releaseQuotaProbe('codex', admission.claimId);
+  });
+
+  it('withholds every OTHER session while that probe is out', async () => {
+    const transport = new FakeTransport();
+    const armedAt = Date.now() - QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS - 1_000;
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt);
+    const admission = tryAdmitQuotaProbe('codex');
+
+    const provider = await readyProvider(transport, [observationMessage]);
+    // The window has elapsed, so isQuotaCooldownActive() answers false here —
+    // which is exactly why the circuit cannot be built on it.
+    expect(isQuotaCooldownActive('codex')).toBe(false);
+
+    const error = await provider
+      .startSession(makeSession({ quotaProbeClaimId: (admission.claimId ?? 0) + 1 }))
+      .then(() => null, (thrown: unknown) => thrown);
+
+    expect(transport.calls).toHaveLength(0);
+    expect(isClassified(error) && error.code).toBe('codex_quota_probe_in_flight');
+    releaseQuotaProbe('codex', admission.claimId);
+  });
+
+  it('withholds a generator that started before the breaker armed and holds no claim', async () => {
+    const transport = new FakeTransport();
+    const armedAt = Date.now() - QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS - 1_000;
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt);
+    const admission = tryAdmitQuotaProbe('codex');
+
+    const provider = await readyProvider(transport, [observationMessage]);
+    const error = await provider
+      .startSession(makeSession({ quotaProbeClaimId: null }))
+      .then(() => null, (thrown: unknown) => thrown);
+
+    expect(transport.calls).toHaveLength(0);
+    expect(isClassified(error) && error.kind).toBe('quota_exhausted');
+    releaseQuotaProbe('codex', admission.claimId);
+  });
+
+  it('is read-only: refusing never claims the probe another session must take', async () => {
+    const transport = new FakeTransport();
+    const armedAt = Date.now();
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt);
+
+    const provider = await readyProvider(transport, [observationMessage]);
+    await provider.startSession(makeSession()).catch(() => {});
+
+    expect(getQuotaCooldown('codex')?.probeInFlightSinceMs).toBeNull();
+    expect(getQuotaCooldown('codex')?.probeClaimId).toBeNull();
+    // And it never re-arms: arming is the route's job, from a real refusal.
+    expect(getQuotaCooldown('codex')?.armedAtMs).toBe(armedAt);
+  });
+
+  it('is scoped to codex: another provider breaker does not gate it', async () => {
+    const transport = new FakeTransport([silentTurn()]);
+    recordQuotaExhausted('openrouter', 'Spend cap reached');
+
+    const provider = await readyProvider(transport, []);
+    await provider.startSession(makeSession());
+
+    expect(transport.calls).toHaveLength(1);
+    clearQuotaCooldown('openrouter');
+  });
+
+  // A turn is handed to the transport after the check above, and the
+  // transport can then park it for a pool slot indefinitely (#2756). A breaker
+  // armed while it waited must still stop it before a process exists.
+  it('checks the circuit again once the slot is granted, so a turn parked when the breaker armed never spawns', async () => {
+    let spawned = 0;
+    class ParkedTransport extends FakeTransport {
+      override async oneShot(prompt: string, ctx: CodexTurnContext): Promise<TurnResult> {
+        // Parked for a slot; meanwhile another session's refusal arms the breaker.
+        recordQuotaExhausted('codex', "You've hit your usage limit", 'quota_exhausted', Date.now(), Date.now() + 4 * 60 * 60_000);
+        await ctx.beforeSpawn?.();
+        spawned += 1;
+        return super.oneShot(prompt, ctx);
+      }
+    }
+    const transport = new ParkedTransport();
+    const provider = await readyProvider(transport, [observationMessage]);
+    const session = makeSession();
+
+    const error = await provider.startSession(session).then(() => null, (thrown: unknown) => thrown);
+
+    expect(spawned).toBe(0);
+    expect(transport.calls).toHaveLength(0);
+    expect(isClassified(error) && error.code).toBe('codex_quota_cooldown');
+    // Stashed like the first check's refusal, for the route's .finally().
+    expect(session.lastProviderError?.code).toBe('codex_quota_cooldown');
+    expect(session.abortReason).toBe('quota:quota_exhausted');
+  });
+
+  it("keeps the probe's claim fresh each time it lets the probe through", async () => {
+    const transport = new FakeTransport([silentTurn()]);
+    const armedAt = Date.now() - QUOTA_EXHAUSTED_RECHECK_COOLDOWN_MS - 60 * 60_000;
+    recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt);
+    // Claimed almost a whole staleness window ago: a slow init exec.
+    const claimedAt = Date.now() - QUOTA_PROBE_STALE_MS + 1_000;
+    const admission = tryAdmitQuotaProbe('codex', claimedAt);
+    expect(admission.admitted).toBe(true);
+
+    const provider = await readyProvider(transport, []);
+    await provider.startSession(makeSession({ quotaProbeClaimId: admission.claimId }));
+
+    const refreshed = getQuotaCooldown('codex')!.probeInFlightSinceMs!;
+    expect(refreshed).toBeGreaterThan(claimedAt);
+    // So where the original claim would have gone stale, no second probe.
+    expect(tryAdmitQuotaProbe('codex', claimedAt + QUOTA_PROBE_STALE_MS + 1).admitted).toBe(false);
+    releaseQuotaProbe('codex', admission.claimId);
+  });
+
+  it('keeps the injectable seam M4 composes the exec budget onto', async () => {
+    const calls: string[] = [];
+    const transport = new FakeTransport([silentTurn()]);
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), {
+      transport,
+      preflight: (_config, ctx) => { calls.push(ctx.purpose); },
+    });
+    const config = (provider as unknown as { getConfig(): CodexConfig }).getConfig();
+    await verifyCodexLockdown(config.binaryPath!, {
+      model: config.model,
+      effort: config.effort,
+      verbosity: config.verbosity,
+      allowUntestedVersion: config.allowUntestedVersion,
+      envSettings: {},
+      probeRunner: probeRunner(),
+    });
+
+    await provider.startSession(makeSession());
+
+    expect(calls).toEqual(['init']);
+  });
+});
+
+/**
+ * getAiStatus reads this string (worker-service.ts). It must describe the
+ * CACHED self-check for the configured binary, including the state where the
+ * check has started and not finished — reporting a logged-out or unverified
+ * Codex as "ChatGPT login" is how a user ends up staring at a silent observer.
+ */
+describe('CodexProvider.getAuthMethodDescription', () => {
+  it('says "verifying" while the self-check is still running, then the real verdict', async () => {
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), { transport: new FakeTransport() });
+    const config = (provider as unknown as { getConfig(): CodexConfig }).getConfig();
+
+    expect(provider.getAuthMethodDescription()).toBe('Codex CLI (not verified yet)');
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gatedRunner = probeRunner();
+    const pending = verifyCodexLockdown(config.binaryPath!, {
+      model: config.model,
+      effort: config.effort,
+      verbosity: config.verbosity,
+      allowUntestedVersion: config.allowUntestedVersion,
+      envSettings: {},
+      probeRunner: async (request) => {
+        if (request.kind === 'version') await gate;
+        return gatedRunner(request);
+      },
+    });
+
+    expect(provider.lockdownStatus()?.state).toBe('pending');
+    expect(provider.getAuthMethodDescription()).toBe('Codex CLI (verifying ChatGPT login)');
+
+    release();
+    expect((await pending).state).toBe('passed');
+    expect(provider.getAuthMethodDescription()).toBe('Codex CLI (ChatGPT login)');
+  });
+
+  it('never borrows another binary verdict when this one cannot be resolved', () => {
+    settings.CLAUDE_MEM_CODEX_PATH = '/nonexistent/codex';
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), { transport: new FakeTransport() });
+
+    expect(provider.getAuthMethodDescription()).toBe('Codex CLI (not found; install it or set CLAUDE_MEM_CODEX_PATH)');
+  });
+});
+
+/**
+ * The readiness surface the route's codex gate reads (M3, plan 3.5). The gate
+ * must be able to ask "ready?" on the ingest path without anything spawning,
+ * and to start the model-free self-check in the background when the answer is
+ * "not yet".
+ */
+describe('CodexProvider readiness surface (M3 gate)', () => {
+  const PASSED = (binaryPath: string) => ({
+    state: 'passed' as const,
+    binaryPath,
+    cacheKey: 'key',
+    version: '0.144.4',
+    authMethod: 'chatgpt' as const,
+    failure: null,
+    warnings: [],
+    startedAt: 0,
+    finishedAt: 1,
+  });
+
+  it('is what the gate recognises as a readiness source', () => {
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), { transport: new FakeTransport() });
+    expect(isCodexReadinessSource(provider)).toBe(true);
+  });
+
+  it('reports a missing binary without starting anything', async () => {
+    settings.CLAUDE_MEM_CODEX_PATH = join(tmpdir(), 'claude-mem-no-such-codex-binary');
+    const startSelfCheck = mock(() => {});
+    const runSelfCheck = mock(async (binaryPath: string) => PASSED(binaryPath));
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), {
+      transport: new FakeTransport(),
+      startSelfCheck,
+      runSelfCheck,
+    });
+
+    expect(provider.readinessSnapshot().state).toBe('binary_missing');
+    expect(await provider.verifyLockdown()).toBeNull();
+    expect(startSelfCheck).not.toHaveBeenCalled();
+    expect(runSelfCheck).not.toHaveBeenCalled();
+  });
+
+  it('is unverified until a check runs, pending while it runs, and passed after — without spawning a turn', async () => {
+    const transport = new FakeTransport();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const runner = probeRunner();
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), {
+      transport,
+      runSelfCheck: (binaryPath, options) => verifyCodexLockdown(binaryPath, {
+        ...options,
+        probeRunner: async (request) => {
+          if (request.kind === 'version') await gate;
+          return runner(request);
+        },
+      }),
+    });
+
+    expect(provider.readinessSnapshot()).toEqual({ state: 'unverified' });
+
+    const running = provider.verifyLockdown();
+    expect(provider.readinessSnapshot()).toEqual({ state: 'pending' });
+
+    release();
+    expect((await running)?.state).toBe('passed');
+    expect(provider.readinessSnapshot()).toEqual({ state: 'passed' });
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it('reports a failed verdict with the failure the gate books', async () => {
+    const runner = probeRunner();
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), {
+      transport: new FakeTransport(),
+      runSelfCheck: (binaryPath, options) => verifyCodexLockdown(binaryPath, {
+        ...options,
+        probeRunner: async (request) => request.kind === 'login_status'
+          ? { exitCode: 1, signal: null, stdout: '', stderr: 'Not logged in\n', timedOut: false }
+          : runner(request),
+      }),
+    });
+
+    expect((await provider.verifyLockdown())?.state).toBe('failed');
+    const snapshot = provider.readinessSnapshot();
+    expect(snapshot.state).toBe('failed');
+    expect(snapshot.state === 'failed' && snapshot.result.authMethod).toBe('not_logged_in');
+  });
+
+  it('fingerprints the setup with the very key a finished verdict is cached under, and changes with it', async () => {
+    const runner = probeRunner();
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), {
+      transport: new FakeTransport(),
+      runSelfCheck: (binaryPath, options) => verifyCodexLockdown(binaryPath, { ...options, probeRunner: runner }),
+    });
+
+    const before = provider.readinessFingerprint();
+    const verdict = await provider.verifyLockdown();
+    expect(before).not.toBeNull();
+    expect(verdict?.cacheKey).toBe(before);
+    // Stable while nothing changes...
+    expect(provider.readinessFingerprint()).toBe(before);
+    // ...and different when a setting the check depends on changes.
+    settings.CLAUDE_MEM_CODEX_MODEL = 'gpt-5.6-luna-mini';
+    expect(provider.readinessFingerprint()).not.toBe(before);
+
+    settings.CLAUDE_MEM_CODEX_PATH = join(tmpdir(), 'claude-mem-no-such-codex-binary');
+    expect(provider.readinessFingerprint()).toBeNull();
+  });
+
+  it('passes `force` through with the same inputs the status read keys on', async () => {
+    const runSelfCheck = mock(async (binaryPath: string) => PASSED(binaryPath));
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), {
+      transport: new FakeTransport(),
+      runSelfCheck,
+    });
+
+    await provider.verifyLockdown({ force: true });
+    await provider.verifyLockdown();
+
+    expect(runSelfCheck.mock.calls[0][1]).toMatchObject({
+      force: true,
+      model: 'gpt-5.6-luna',
+      effort: 'low',
+      verbosity: 'low',
+      allowUntestedVersion: false,
+      envSettings: {},
+    });
+    expect((runSelfCheck.mock.calls[1][1] as { force?: boolean }).force).toBeUndefined();
+  });
+
+  it("tells the route which quota refusals are the circuit's own", async () => {
+    resetQuotaCooldownsForTesting();
+    try {
+      const provider = await readyProvider(new FakeTransport(), [observationMessage]);
+      const session = makeSession();
+      recordQuotaExhausted('codex', "You've hit your usage limit", '5h', Date.now(), Date.now() + 60 * 60_000);
+
+      const refusal = await provider.startSession(session).then(() => null, (thrown: unknown) => thrown);
+
+      expect(isCodexQuotaCircuitRefusal(refusal)).toBe(true);
+      // A refusal Codex itself returned is news, and must be booked.
+      expect(isCodexQuotaCircuitRefusal(new ClassifiedProviderError("You've hit your usage limit", {
+        kind: 'quota_exhausted',
+        cause: null,
+        code: 'codex_usage_limit',
+      }))).toBe(false);
+      expect(isCodexQuotaCircuitRefusal(new Error('codex_quota_cooldown'))).toBe(false);
+    } finally {
+      resetQuotaCooldownsForTesting();
+    }
   });
 });
