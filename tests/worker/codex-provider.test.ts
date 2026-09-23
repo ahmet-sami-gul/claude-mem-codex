@@ -205,6 +205,9 @@ function makeSessionManager(messages: unknown[]): SessionManager {
     getClaimedMessages: mock(() => []),
     confirmClaimedMessages: mock(() => Promise.resolve(0)),
     resetProcessingToPending: mock(() => Promise.resolve(0)),
+    // Codex batches by default (M4); this double has no queue behind the
+    // iterator, so every batch is just the message the drain yielded.
+    claimObservationBatch: mock(async (_sessionDbId: number, first: unknown) => [first]),
   } as unknown as SessionManager;
 }
 
@@ -455,11 +458,13 @@ describe('CodexProvider readiness', () => {
 
   it('runs once the lockdown self-check has passed for that binary', async () => {
     const transport = new FakeTransport();
-    const provider = await readyProvider(transport, []);
+    const provider = await readyProvider(transport, [observationMessage]);
 
     await provider.startSession(makeSession());
 
-    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['init']);
+    // No init exec of its own (M4 deferInitQuery): the first call is the
+    // observation, carrying the init turn as its head.
+    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['observation']);
     expect(provider.lockdownStatus()?.state).toBe('passed');
     expect(provider.getAuthMethodDescription()).toBe('Codex CLI (ChatGPT login)');
   });
@@ -468,8 +473,7 @@ describe('CodexProvider readiness', () => {
 describe('CodexProvider session lifecycle', () => {
   it('stores an observation and a summary through one Codex turn each', async () => {
     const transport = new FakeTransport([
-      silentTurn(),             // init: the observer says nothing to the init prompt
-      turn(observationXml),     // observation
+      turn(observationXml),     // observation (the deferred init turn rides along as its head)
       turn(observationXml),     // summary
     ]);
     const provider = await readyProvider(transport, [observationMessage, summarizeMessage]);
@@ -477,8 +481,14 @@ describe('CodexProvider session lifecycle', () => {
 
     await provider.startSession(session);
 
-    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['init', 'observation', 'summary']);
+    // Exactly one exec per message: no standalone init exec (M4 hook 8).
+    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['observation', 'summary']);
     expect(storeObservations).toHaveBeenCalledTimes(2);
+    // The init turn is the stable head of the conversation, sent inside the
+    // first real call's transcript rather than on its own.
+    expect(session.conversationHistory[0].role).toBe('user');
+    expect(session.conversationHistory[0].content).toContain('<user_request>test prompt</user_request>');
+    expect(transport.calls[0].prompt).toContain('<user_request>test prompt</user_request>');
     // Every turn is rendered by renderCodexPrompt: framed transcript plus the
     // message being answered now.
     for (const call of transport.calls) {
@@ -486,7 +496,7 @@ describe('CodexProvider session lifecycle', () => {
       expect(call.prompt).toContain('<current_task turn="');
     }
     // The turn context carries the session and the resolved invocation.
-    expect(transport.calls[1].ctx).toMatchObject({
+    expect(transport.calls[0].ctx).toMatchObject({
       sessionDbId: 7,
       contentSessionId: 'content-7',
       project: 'test-project',
@@ -495,7 +505,7 @@ describe('CodexProvider session lifecycle', () => {
       verbosity: 'low',
       timeoutMs: 180000,
     });
-    expect(transport.calls[1].ctx.abortSignal).toBe(session.abortController.signal);
+    expect(transport.calls[0].ctx.abortSignal).toBe(session.abortController.signal);
     // The reported counts reached the session's accounting (the stored
     // lastUsage itself is consumed and cleared by the telemetry path).
     expect(session.cumulativeInputTokens).toBeGreaterThan(0);
@@ -519,7 +529,7 @@ describe('CodexProvider session lifecycle', () => {
     settings.CLAUDE_MEM_CODEX_MODEL = 'gpt-5.6-luna';
     settings.CLAUDE_MEM_CODEX_SUMMARY_MODEL = 'gpt-5.6-terra';
     const transport = new FakeTransport();
-    const provider = await readyProvider(transport, [summarizeMessage]);
+    const provider = await readyProvider(transport, [observationMessage, summarizeMessage]);
 
     await provider.startSession(makeSession());
 
@@ -529,7 +539,7 @@ describe('CodexProvider session lifecycle', () => {
   it('falls back to the observer model when no summary model is configured', async () => {
     settings.CLAUDE_MEM_CODEX_SUMMARY_MODEL = '';
     const transport = new FakeTransport();
-    const provider = await readyProvider(transport, [summarizeMessage]);
+    const provider = await readyProvider(transport, [observationMessage, summarizeMessage]);
 
     await provider.startSession(makeSession());
 
@@ -570,22 +580,22 @@ describe('CodexProvider session lifecycle', () => {
     const offTransport = new FakeTransport();
     const off = await readyProvider(offTransport, [oversized]);
     await off.startSession(makeSession());
-    expect(offTransport.calls.map(call => call.ctx.purpose)).toEqual(['init', 'observation']);
+    expect(offTransport.calls.map(call => call.ctx.purpose)).toEqual(['observation']);
 
     resetCodexSelfCheckCache();
     settings.CLAUDE_MEM_CODEX_FIELD_COMPRESSION = 'true';
-    const onTransport = new FakeTransport([silentTurn(), turn('condensed payload'), turn(observationXml)]);
+    const onTransport = new FakeTransport([turn('condensed payload'), turn(observationXml)]);
     const on = await readyProvider(onTransport, [oversized]);
     const onSession = makeSession();
     await on.startSession(onSession);
-    expect(onTransport.calls.map(call => call.ctx.purpose)).toEqual(['init', 'field_compression', 'observation']);
+    expect(onTransport.calls.map(call => call.ctx.purpose)).toEqual(['field_compression', 'observation']);
 
     // The compression exec is attributed to the session it belongs to, not to
     // sessionDbId 0. Under the real transport 0 means the shared jail
     // directory OBSERVER_SESSIONS_DIR/0, a registry entry no session owns, an
     // observer-audit row for the wrong session, and — worst — one
     // lockdown-violation counter shared by every session in the process.
-    const compression = onTransport.calls[1];
+    const compression = onTransport.calls[0];
     expect(compression.ctx).toMatchObject({
       sessionDbId: 7,
       contentSessionId: 'content-7',
@@ -607,7 +617,6 @@ describe('CodexProvider session lifecycle', () => {
    */
   it('forwards an empty observation turn so the batch is confirmed instead of re-sent', async () => {
     const transport = new FakeTransport([
-      turn(observationXml),  // init
       silentTurn(),          // the observer chose to say nothing about this tool call
     ]);
     const sessionManager = makeSessionManager([observationMessage]);
@@ -624,7 +633,7 @@ describe('CodexProvider session lifecycle', () => {
 
     await provider.startSession(makeSession());
 
-    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['init', 'observation']);
+    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['observation']);
     expect(sessionManager.confirmClaimedMessages).toHaveBeenCalled();
     expect(sessionManager.resetProcessingToPending).not.toHaveBeenCalled();
     expect(storeObservations).not.toHaveBeenCalled();
@@ -642,7 +651,7 @@ describe('CodexProvider session lifecycle', () => {
       recorded.push({ event, props });
     }) as never);
     try {
-      const transport = new FakeTransport([silentTurn(), turn(observationXml)]);
+      const transport = new FakeTransport([turn(observationXml)]);
       const provider = await readyProvider(transport, [observationMessage]);
 
       await provider.startSession(makeSession({ currentProvider: null }));
@@ -677,7 +686,7 @@ describe('CodexProvider session lifecycle', () => {
       turn('', { failureMessage: "You've hit your usage limit.", exitCode: 1, turnCompleted: false }),
     ]);
     transport.violations.record(7);
-    const provider = await readyProvider(transport, []);
+    const provider = await readyProvider(transport, [observationMessage]);
 
     await provider.startSession(makeSession()).catch(() => {});
 
@@ -688,7 +697,7 @@ describe('CodexProvider session lifecycle', () => {
     const transport = new FakeTransport([
       turn('', { failureMessage: "You've hit your usage limit.", exitCode: 1, turnCompleted: false }),
     ]);
-    const provider = await readyProvider(transport, []);
+    const provider = await readyProvider(transport, [observationMessage]);
     const session = makeSession();
 
     const error = await provider.startSession(session).then(() => null, (thrown: unknown) => thrown);
@@ -803,11 +812,11 @@ describe('CodexProvider quota circuit', () => {
 
   it('proceeds normally when no breaker is armed', async () => {
     const transport = new FakeTransport([silentTurn()]);
-    const provider = await readyProvider(transport, []);
+    const provider = await readyProvider(transport, [observationMessage]);
 
     await provider.startSession(makeSession());
 
-    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['init']);
+    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['observation']);
   });
 
   it('lets the generator that OWNS the in-flight probe spend its one exec', async () => {
@@ -817,11 +826,11 @@ describe('CodexProvider quota circuit', () => {
     const admission = tryAdmitQuotaProbe('codex');
     expect(admission.admitted).toBe(true);
 
-    const provider = await readyProvider(transport, []);
+    const provider = await readyProvider(transport, [observationMessage]);
     // The route hands its claim to the session; this generator IS the probe.
     await provider.startSession(makeSession({ quotaProbeClaimId: admission.claimId }));
 
-    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['init']);
+    expect(transport.calls.map(call => call.ctx.purpose)).toEqual(['observation']);
     releaseQuotaProbe('codex', admission.claimId);
   });
 
@@ -879,7 +888,7 @@ describe('CodexProvider quota circuit', () => {
     const transport = new FakeTransport([silentTurn()]);
     recordQuotaExhausted('openrouter', 'Spend cap reached');
 
-    const provider = await readyProvider(transport, []);
+    const provider = await readyProvider(transport, [observationMessage]);
     await provider.startSession(makeSession());
 
     expect(transport.calls).toHaveLength(1);
@@ -923,7 +932,7 @@ describe('CodexProvider quota circuit', () => {
     const admission = tryAdmitQuotaProbe('codex', claimedAt);
     expect(admission.admitted).toBe(true);
 
-    const provider = await readyProvider(transport, []);
+    const provider = await readyProvider(transport, [observationMessage]);
     await provider.startSession(makeSession({ quotaProbeClaimId: admission.claimId }));
 
     const refreshed = getQuotaCooldown('codex')!.probeInFlightSinceMs!;
@@ -936,7 +945,7 @@ describe('CodexProvider quota circuit', () => {
   it('keeps the injectable seam M4 composes the exec budget onto', async () => {
     const calls: string[] = [];
     const transport = new FakeTransport([silentTurn()]);
-    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), {
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([observationMessage]), {
       transport,
       preflight: (_config, ctx) => { calls.push(ctx.purpose); },
     });
@@ -952,7 +961,9 @@ describe('CodexProvider quota circuit', () => {
 
     await provider.startSession(makeSession());
 
-    expect(calls).toEqual(['init']);
+    // The fake transport never reaches beforeSpawn, so this is the one check
+    // made before the prompt is rendered.
+    expect(calls).toEqual(['observation']);
   });
 });
 

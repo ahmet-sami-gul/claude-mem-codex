@@ -92,6 +92,8 @@ interface PersistedQuotaCooldown {
    * back to probing every 30 minutes until it does.
    */
   resumeAtMs?: number;
+  /** See QuotaCooldownState.code. */
+  code?: string;
 }
 
 function defaultCooldownFilePath(): string {
@@ -114,12 +116,14 @@ function hydrateFromDisk(filePath: string = defaultCooldownFilePath()): void {
       // a garbled resume time must degrade to the fixed window, not to a
       // breaker that is armed forever or not at all.
       const resumeAtMs = sanitizeResumeAtMs(entry.resumeAtMs, entry.armedAtMs);
+      const code = sanitizeCode(entry.code);
       cooldowns.set(entry.provider, {
         provider: entry.provider,
         message: entry.message ?? 'Provider reported the inference allowance exhausted',
         ...(entry.window ? { window: entry.window } : {}),
         armedAtMs: entry.armedAtMs,
         ...(resumeAtMs !== undefined ? { resumeAtMs } : {}),
+        ...(code !== undefined ? { code } : {}),
         // Never restored: the process that could have held this is gone.
         probeInFlightSinceMs: null,
         probeClaimId: null,
@@ -145,6 +149,7 @@ function persistToDisk(filePath: string = defaultCooldownFilePath()): void {
       ...(state.window ? { window: state.window } : {}),
       armedAtMs: state.armedAtMs,
       ...(state.resumeAtMs !== undefined ? { resumeAtMs: state.resumeAtMs } : {}),
+      ...(state.code !== undefined ? { code: state.code } : {}),
     }));
     const tmp = `${filePath}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify(rows, null, 2), 'utf-8');
@@ -189,6 +194,18 @@ export interface QuotaCooldownState {
    * when the breaker lifts is precisely the bug this field is meant to fix.
    */
   resumeAtMs?: number;
+  /**
+   * The classified `code` of the refusal that armed this window, when the
+   * caller passed one (Codex only). Undefined for every other provider and for
+   * a re-arm that stated none, so their states are exactly what they were.
+   *
+   * It lets a hold be re-evaluated against its own cause: a window armed by
+   * the LOCAL Codex exec budget (`local_budget`) is a limit claude-mem set for
+   * itself, and when the user raises that limit, turns it off or resets the
+   * usage file, the hold must lift then — not at the resume time computed from
+   * the old limit, up to five hours later (CodexProvider.releaseStaleLocalBudgetHold).
+   */
+  code?: string;
   /**
    * When the single post-expiry probe was claimed, or null when none is in
    * flight. Without this the expiry check is a bare read: every concurrent
@@ -236,6 +253,11 @@ const cooldowns = new Map<QuotaProvider, QuotaCooldownState>();
  * honoured as far as we are willing to trust it, and only the excess is a
  * misparse.
  */
+/** A persisted or passed refusal code: a short non-empty string, else nothing. */
+function sanitizeCode(code: unknown): string | undefined {
+  return typeof code === 'string' && code.length > 0 && code.length <= 200 ? code : undefined;
+}
+
 function sanitizeResumeAtMs(resumeAtMs: number | null | undefined, armedAtMs: number): number | undefined {
   if (resumeAtMs === null || resumeAtMs === undefined) return undefined;
   if (!Number.isFinite(resumeAtMs)) return undefined;
@@ -319,6 +341,12 @@ export function recordQuotaExhausted(
    * states one today; every other caller omits it and gets the fixed window.
    */
   resumeAtMs?: number | null,
+  /**
+   * The classified code of the refusal (QuotaCooldownState.code). Codex only;
+   * never carried across a re-arm that does not state one — the code names
+   * THIS refusal's cause.
+   */
+  code?: string | null,
 ): QuotaCooldownState {
   hydrateFromDisk();
   const prior = cooldowns.get(provider);
@@ -340,12 +368,14 @@ export function recordQuotaExhausted(
     ? prior.resumeAtMs
     : undefined;
   const effectiveResumeAtMs = stated ?? carried;
+  const statedCode = sanitizeCode(code);
   const state: QuotaCooldownState = {
     provider,
     message,
     ...(window ? { window } : {}),
     armedAtMs,
     ...(effectiveResumeAtMs !== undefined ? { resumeAtMs: effectiveResumeAtMs } : {}),
+    ...(statedCode !== undefined ? { code: statedCode } : {}),
     // Re-arming ends whatever probe was in flight: this IS that probe failing.
     probeInFlightSinceMs: null,
     probeClaimId: null,

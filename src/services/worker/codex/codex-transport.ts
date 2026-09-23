@@ -57,8 +57,24 @@ export interface CodexTurnContext {
    * transport, but a turn can then wait for a slot indefinitely (#2756), and
    * a breaker armed while it waited would otherwise not be seen until after
    * the exec it exists to prevent.
+   *
+   * A check that returns synchronously (void, not a promise) is NOT awaited:
+   * the check, the spawn and `onSpawned` then run in one synchronous block.
+   * That is what makes the local exec budget (M4) exact — two turns granted
+   * slots at the same moment cannot both pass a "one exec left" check before
+   * either has been counted.
    */
   beforeSpawn?: () => void | Promise<void>;
+  /**
+   * Called exactly once, synchronously, the moment a codex process exists —
+   * right after the registry handed back a child, before the prompt is
+   * written. Every exec that reaches the user's plan passes through here,
+   * whatever happens to it afterwards (success, refusal, timeout, abort, guard
+   * kill), and nothing that was not spawned does. The local 5-hour budget and
+   * the per-purpose counters (M4) count here for that reason. Must not throw;
+   * a throw is logged and ignored, the exec is already running.
+   */
+  onSpawned?: () => void;
 }
 
 /**

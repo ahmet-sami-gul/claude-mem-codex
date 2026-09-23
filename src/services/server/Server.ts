@@ -21,6 +21,8 @@ import { getUptimeSeconds } from '../../shared/uptime.js';
 import { snapshotDependencyHealth, type DependencyHealthSnapshot } from '../../shared/dependency-health.js';
 import { globalRateLimitStore } from '../worker/RateLimitStore.js';
 import type { ObservationQueueHealth } from '../../server/queue/queue-health-types.js';
+import type { CodexBudgetSnapshot } from '../worker/codex/codex-budget.js';
+import type { CodexMetricsSnapshot } from '../worker/codex/codex-metrics.js';
 
 const INSTRUCTIONS_BASE_DIR: string = path.resolve(__dirname, '../skills/mem-search');
 const INSTRUCTIONS_OPERATIONS_DIR: string = path.join(INSTRUCTIONS_BASE_DIR, 'operations');
@@ -82,6 +84,14 @@ export interface AiStatus {
     success: boolean;
     error?: string;
   } | null;
+  /**
+   * Codex only (M4): the local 5-hour exec budget and the observer's usage
+   * counters. Counts and timestamps only — never prompt content.
+   */
+  codex?: {
+    budget: CodexBudgetSnapshot;
+    metrics: CodexMetricsSnapshot;
+  };
 }
 
 export interface ServerOptions {

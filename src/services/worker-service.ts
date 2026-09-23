@@ -20,6 +20,7 @@ import { ChromaMcpManager } from './sync/ChromaMcpManager.js';
 import { ChromaSync } from './sync/ChromaSync.js';
 import { openConfiguredSqliteDatabase } from './sqlite/connection.js';
 import { configureSupervisorSignalHandlers, getSupervisor, startSupervisor } from '../supervisor/index.js';
+import { reapOrphanedCodexExecs } from '../supervisor/codex-orphan-reaper.js';
 import { sanitizeEnv } from '../supervisor/env-sanitizer.js';
 
 import { ensureWorkerStarted as ensureWorkerStartedShared, getLastWorkerBootFailure, type WorkerStartResult } from './worker-spawner.js';
@@ -87,6 +88,7 @@ import type { WorkerRef } from './worker/agents/types.js';
 import { GeminiProvider, classifyGeminiError } from './worker/GeminiProvider.js';
 import { OpenRouterProvider, classifyOpenRouterError } from './worker/OpenRouterProvider.js';
 import { CodexProvider } from './worker/CodexProvider.js';
+import { startCodexMetricsReporter } from './worker/codex/codex-metrics.js';
 import { getSelectedProvider } from './worker/provider-dispatch.js';
 import { ClassifiedProviderError, isClassified, type ProviderErrorClass } from './worker/provider-errors.js';
 import { PaginationHelper } from './worker/PaginationHelper.js';
@@ -223,6 +225,8 @@ export class WorkerService implements WorkerRef {
   private geminiAgent: GeminiProvider;
   private openRouterAgent: OpenRouterProvider;
   private codexAgent: CodexProvider;
+  /** Periodic Codex usage log line (M4); stopped at shutdown. */
+  private codexMetricsReporter: { stop: () => void } | null = null;
   /** Held for the codex readiness warm-up at boot and the resume-timer cleanup at shutdown. */
   private sessionRoutes: SessionRoutes | null = null;
   private paginationHelper: PaginationHelper;
@@ -313,6 +317,10 @@ export class WorkerService implements WorkerRef {
           authMethod: provider === 'codex'
             ? this.codexAgent.getAuthMethodDescription()
             : getAuthMethodDescription(),
+          // Codex only (M4): the local 5-hour exec budget and the usage
+          // counters — how many plan messages and tokens the observer spent,
+          // and what the cost levers saved. Counts and timestamps only.
+          ...(provider === 'codex' ? { codex: this.codexAgent.getUsageStatus() } : {}),
           lastInteraction: this.lastAiInteraction
             ? {
                 timestamp: this.lastAiInteraction.timestamp,
@@ -465,6 +473,39 @@ export class WorkerService implements WorkerRef {
     }
   }
 
+  /**
+   * Boot-time Codex housekeeping (M4), whatever provider is selected:
+   *
+   *   - codex execs a dead predecessor left running (plan 2.6) spend plan
+   *     messages for answers no one will read and hold pool slots. Only
+   *     records positively identified as our codex execs are signalled. The
+   *     registry snapshot is taken synchronously here, before this worker has
+   *     spawned anything; the SIGINT/SIGKILL wait runs in the background;
+   *   - the periodic Codex usage log line (quiet until something happened).
+   *
+   * Called from start() right after startSupervisor(); undone by
+   * stopCodexHousekeeping() at shutdown.
+   */
+  private startCodexHousekeeping(): void {
+    void reapOrphanedCodexExecs({
+      executablePath: () => this.codexAgent.resolvedBinaryPath(),
+    }).catch((error: unknown) => {
+      logger.warn('PROCESS', 'Codex orphan cleanup failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    this.codexMetricsReporter = startCodexMetricsReporter();
+  }
+
+  /** Shutdown half of startCodexHousekeeping. */
+  private stopCodexHousekeeping(): void {
+    this.codexMetricsReporter?.stop();
+    this.codexMetricsReporter = null;
+    // Token counts are written on a short debounce; the exec timestamps the
+    // budget enforces are already on disk.
+    this.codexAgent.flushUsage();
+  }
+
   async start(): Promise<void> {
     const port = getWorkerPort();
     const host = getWorkerHost();
@@ -483,6 +524,10 @@ export class WorkerService implements WorkerRef {
     this.detectPreviousShutdown();
 
     await startSupervisor();
+
+    // Right after the supervisor has loaded the registry, and before this
+    // worker can spawn anything.
+    this.startCodexHousekeeping();
 
     await this.server.listen(port, host);
 
@@ -895,6 +940,7 @@ export class WorkerService implements WorkerRef {
         // No observer resume may start a generator while the sessions are
         // being torn down; the timers are unref'd and in-memory anyway.
         this.sessionRoutes?.dispose();
+        this.stopCodexHousekeeping();
         if (this.deferredSessionEndReplayTimer !== null) {
           clearInterval(this.deferredSessionEndReplayTimer);
           this.deferredSessionEndReplayTimer = null;

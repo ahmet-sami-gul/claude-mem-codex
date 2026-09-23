@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'bun:test';
 import {
+  countFieldsNeedingCompression,
   optimizeField,
   optimizeObservationFields,
   buildFieldCompressionPrompt,
@@ -103,5 +104,37 @@ describe('oversized observation fields are condensed, not cut (#3800)', () => {
     expect(prompt).toContain('some payload');
     expect(prompt).toContain('file paths');
     expect(prompt).toContain('no code');
+  });
+});
+
+describe('countFieldsNeedingCompression (M4: the compression execs a skipped pass saves)', () => {
+  const editInput = { file_path: '/fixture/huge.ts', old_string: 'old()', new_string: 'new()', replace_all: false };
+  const prefix = 'x'.repeat(100_000);
+  const editOutput = { filePath: editInput.file_path, oldString: editInput.old_string, newString: editInput.new_string,
+    originalFile: null, userModified: false,
+    structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
+      lines: ['-' + prefix + 'old()', '+' + prefix + 'new()'] }] };
+
+  it('predicts exactly the number of compressor calls optimizeObservationFields makes', async () => {
+    const cases: Array<{ fields: { toolInput: unknown; toolOutput: unknown }; toolName?: string }> = [
+      { fields: { toolInput: { a: 1 }, toolOutput: 'ok' } },
+      { fields: { toolInput: oversized, toolOutput: 'ok' } },
+      { fields: { toolInput: 'small', toolOutput: oversized } },
+      { fields: { toolInput: oversized, toolOutput: oversized } },
+      // A JSON string the size test measures quoted, as the HTTP ingest delivers it.
+      { fields: { toolInput: JSON.stringify(oversized), toolOutput: '{}' } },
+      // Just under / just over the cap once pretty-printed.
+      { fields: { toolInput: 'y'.repeat(MAX - 2), toolOutput: 'y'.repeat(MAX - 1) } },
+      // An oversized native Edit whose observer view is compacted first: no call.
+      { fields: { toolInput: editInput, toolOutput: editOutput }, toolName: 'Edit' },
+      // The same payload under another tool name is not compacted.
+      { fields: { toolInput: editInput, toolOutput: editOutput }, toolName: 'Write' },
+    ];
+    for (const { fields, toolName } of cases) {
+      let calls = 0;
+      const counting: FieldCompressor = async () => { calls++; return null; };
+      await optimizeObservationFields(fields, counting, { sessionDbId: 1, toolName }, MAX);
+      expect(countFieldsNeedingCompression(fields, { toolName }, MAX)).toBe(calls);
+    }
   });
 });

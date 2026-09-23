@@ -124,3 +124,129 @@ describe('SessionMessageBuffer (in-RAM observation buffer)', () => {
     ]);
   });
 });
+
+describe('SessionMessageBuffer.claimContiguous (M4 observation batching)', () => {
+  function summarize(): PendingMessage {
+    return { type: 'summarize', last_assistant_message: 'done' };
+  }
+
+  /** Claim the head of the queue the way the drain does, via a one-shot drain. */
+  async function claimHead(buffer: SessionMessageBuffer, sessionDbId: number): Promise<PendingMessageWithId> {
+    const controller = new AbortController();
+    const iterator = buffer.drain({ sessionDbId, signal: controller.signal, idleTimeoutMs: 30 });
+    const first = await iterator.next();
+    controller.abort();
+    await iterator.return?.();
+    if (first.done) throw new Error('nothing to claim');
+    return first.value;
+  }
+
+  test('claims unclaimed messages oldest first, skipping the ones already claimed', async () => {
+    const buffer = new SessionMessageBuffer();
+    buffer.enqueue(1, obs('A'));
+    buffer.enqueue(1, obs('B'));
+    buffer.enqueue(1, obs('C'));
+    const head = await claimHead(buffer, 1);
+    expect(head.tool_name).toBe('A');
+
+    const claimed = buffer.claimContiguous(1, () => true, 10);
+    expect(claimed.map(m => m.tool_name)).toEqual(['B', 'C']);
+    // Same view the drain yields: persistent id + original enqueue time.
+    expect(claimed[0]._persistentId).toBeGreaterThan(head._persistentId);
+    expect(typeof claimed[0]._originalTimestamp).toBe('number');
+    expect(buffer.getUnclaimedCount(1)).toBe(0);
+    // Claimed is not confirmed: everything is still buffered.
+    expect(buffer.getPendingCount(1)).toBe(3);
+  });
+
+  test('stops at the first rejected message and never claims past it (summarize is never skipped)', () => {
+    const buffer = new SessionMessageBuffer();
+    buffer.enqueue(1, obs('A'));
+    buffer.enqueue(1, summarize());
+    buffer.enqueue(1, obs('B'));
+
+    const seen: string[] = [];
+    const claimed = buffer.claimContiguous(1, (m) => {
+      seen.push(m.type === 'summarize' ? 'summarize' : m.tool_name!);
+      return m.type === 'observation';
+    }, 10);
+
+    expect(claimed.map(m => m.tool_name)).toEqual(['A']);
+    // B sits behind the summarize request, so it is not even offered.
+    expect(seen).toEqual(['A', 'summarize']);
+    expect(buffer.getUnclaimedCount(1)).toBe(2);
+  });
+
+  test('respects max and does not consult accept once the batch is full', () => {
+    const buffer = new SessionMessageBuffer();
+    for (const name of ['A', 'B', 'C', 'D']) buffer.enqueue(1, obs(name));
+    let calls = 0;
+    const claimed = buffer.claimContiguous(1, () => { calls++; return true; }, 2);
+    expect(claimed.map(m => m.tool_name)).toEqual(['A', 'B']);
+    expect(calls).toBe(2);
+    expect(buffer.claimContiguous(1, () => true, 0)).toEqual([]);
+    expect(buffer.claimContiguous(99, () => true, 5)).toEqual([]);
+  });
+
+  test('notifies the mutation hook once per claim that took something', () => {
+    let mutations = 0;
+    const buffer = new SessionMessageBuffer(() => { mutations++; });
+    buffer.enqueue(1, obs('A'));
+    buffer.enqueue(1, obs('B'));
+    mutations = 0;
+    buffer.claimContiguous(1, () => true, 5);
+    expect(mutations).toBe(1);
+    buffer.claimContiguous(1, () => true, 5);
+    expect(mutations).toBe(1);
+  });
+
+  test('claimed batch members are confirmed and reset like drained ones', async () => {
+    const buffer = new SessionMessageBuffer();
+    buffer.enqueue(1, obs('A'));
+    buffer.enqueue(1, obs('B'));
+    buffer.enqueue(1, obs('C'));
+    const claimed = buffer.claimContiguous(1, () => true, 2);
+    expect(buffer.resetClaimed(1)).toBe(2);
+    const redrained = await drainAll(buffer, 1);
+    expect(redrained.map(m => m.tool_name)).toEqual(['A', 'B', 'C']);
+    for (const m of claimed) expect(buffer.confirm(m._persistentId)).toBe(1);
+    expect(buffer.getPendingCount(1)).toBe(1);
+  });
+});
+
+describe('SessionMessageBuffer.waitForNewMessage', () => {
+  test('resolves true when a message is enqueued for the session', async () => {
+    const buffer = new SessionMessageBuffer();
+    const controller = new AbortController();
+    const waiting = buffer.waitForNewMessage(1, controller.signal, 5_000);
+    setTimeout(() => buffer.enqueue(1, obs('A')), 10);
+    const start = Date.now();
+    expect(await waiting).toBe(true);
+    expect(Date.now() - start).toBeLessThan(2_000);
+  });
+
+  test('resolves false on timeout, and ignores other sessions', async () => {
+    const buffer = new SessionMessageBuffer();
+    const waiting = buffer.waitForNewMessage(1, new AbortController().signal, 40);
+    buffer.enqueue(2, obs('A'));
+    expect(await waiting).toBe(false);
+  });
+
+  test('resolves false at once for an aborted signal or a non-positive timeout', async () => {
+    const buffer = new SessionMessageBuffer();
+    const aborted = new AbortController();
+    aborted.abort();
+    const start = Date.now();
+    expect(await buffer.waitForNewMessage(1, aborted.signal, 5_000)).toBe(false);
+    expect(await buffer.waitForNewMessage(1, new AbortController().signal, 0)).toBe(false);
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
+
+  test('resolves false when the signal aborts mid-wait', async () => {
+    const buffer = new SessionMessageBuffer();
+    const controller = new AbortController();
+    const waiting = buffer.waitForNewMessage(1, controller.signal, 5_000);
+    setTimeout(() => controller.abort(), 10);
+    expect(await waiting).toBe(false);
+  });
+});

@@ -922,6 +922,122 @@ describe('settleCodexTurn', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// M4: the spawn-time hooks the local exec budget counts through
+// ---------------------------------------------------------------------------
+
+describe('ExecTransport onSpawned / synchronous beforeSpawn (M4)', () => {
+  posixIt('onSpawned fires exactly once for a spawned exec that succeeds', async () => {
+    const f = fake({ stdoutFixture: fixturePath('p0-success-trivial.jsonl') });
+    let spawned = 0;
+    const result = await transport(f).oneShot('prompt', ctxFor(f, { onSpawned: () => { spawned += 1; } }));
+    expect(result.turnCompleted).toBe(true);
+    expect(spawned).toBe(1);
+  }, SPAWN_TEST_TIMEOUT_MS);
+
+  posixIt('onSpawned fires for an exec that fails: a refused turn still reached the plan', async () => {
+    const f = fake({ stdoutFixture: fixturePath('synthetic-usage-limit-same-day.jsonl'), exitCode: 1 });
+    let spawned = 0;
+    const error = (await expectRejection(
+      transport(f).run('prompt', ctxFor(f, { onSpawned: () => { spawned += 1; } })),
+    )) as ClassifiedProviderError;
+    expect(error.kind).toBe('quota_exhausted');
+    expect(spawned).toBe(1);
+  }, SPAWN_TEST_TIMEOUT_MS);
+
+  posixIt('onSpawned fires for an exec the session aborts mid-turn', async () => {
+    const f = fake({ hang: true });
+    const controller = new AbortController();
+    let spawned = 0;
+    const pending = transport(f).oneShot('prompt', ctxFor(f, {
+      abortSignal: controller.signal,
+      onSpawned: () => { spawned += 1; },
+    }));
+    expect(await waitFor(() => f.grandchildPid() !== null)).toBe(true);
+    controller.abort();
+    expect(isAbortError(await expectRejection(pending))).toBe(true);
+    expect(spawned).toBe(1);
+    expect(await waitForPidGone(Number(f.read('pid.txt')))).toBe(true);
+  }, SPAWN_TEST_TIMEOUT_MS);
+
+  posixIt('onSpawned never fires when nothing was spawned', async () => {
+    const f = fake({});
+    let spawned = 0;
+    const onSpawned = (): void => { spawned += 1; };
+
+    // Refused by the pre-spawn check.
+    _internals.waitForSlot = (async () => ({ release: () => {} })) as typeof _internals.waitForSlot;
+    await expectRejection(transport(f).oneShot('prompt', ctxFor(f, {
+      onSpawned,
+      beforeSpawn: () => { throw new ClassifiedProviderError('budget', { kind: 'quota_exhausted', cause: null, code: 'local_budget' }); },
+    })));
+    // The registry could not start it.
+    _internals.spawnSdkProcess = (() => null) as typeof _internals.spawnSdkProcess;
+    await expectRejection(transport(f).oneShot('prompt', ctxFor(f, { onSpawned })));
+    // Aborted before any slot.
+    const controller = new AbortController();
+    controller.abort();
+    await expectRejection(transport(f).oneShot('prompt', ctxFor(f, { onSpawned, abortSignal: controller.signal })));
+
+    expect(spawned).toBe(0);
+  });
+
+  posixIt('a synchronous beforeSpawn is not awaited: check, spawn and count run in one synchronous block', async () => {
+    const f = fake({});
+    const order: string[] = [];
+    _internals.waitForSlot = (async () => ({ release: () => {} })) as typeof _internals.waitForSlot;
+    _internals.spawnSdkProcess = (() => {
+      order.push('spawn');
+      return null;
+    }) as typeof _internals.spawnSdkProcess;
+
+    await expectRejection(transport(f).oneShot('prompt', ctxFor(f, {
+      beforeSpawn: () => {
+        order.push('check');
+        // Anything else waiting on the event loop — another turn's check,
+        // say — runs no earlier than this microtask.
+        queueMicrotask(() => order.push('another turn'));
+      },
+    })));
+
+    expect(order).toEqual(['check', 'spawn', 'another turn']);
+  });
+
+  posixIt('two turns granted slots together cannot both pass a one-exec-left check', async () => {
+    // The shape of the local budget: a read-only check before the spawn and a
+    // count once the process exists. With the check awaited, both turns would
+    // pass it before either had been counted.
+    const f = fake({ stdoutFixture: fixturePath('p0-success-trivial.jsonl') });
+    let counted = 0;
+    const limit = 1;
+    const ctx = (): CodexTurnContext => ctxFor(f, {
+      beforeSpawn: () => {
+        if (counted >= limit) {
+          throw new ClassifiedProviderError('budget reached', { kind: 'quota_exhausted', cause: null, code: 'local_budget' });
+        }
+      },
+      onSpawned: () => { counted += 1; },
+    });
+    const t = transport(f);
+
+    const outcomes = await Promise.allSettled([t.oneShot('prompt', ctx()), t.oneShot('prompt', ctx())]);
+
+    expect(outcomes.filter(o => o.status === 'fulfilled')).toHaveLength(1);
+    const refused = outcomes.find(o => o.status === 'rejected') as PromiseRejectedResult;
+    expect((refused.reason as ClassifiedProviderError).code).toBe('local_budget');
+    expect(counted).toBe(1);
+  }, SPAWN_TEST_TIMEOUT_MS);
+
+  posixIt('a throwing onSpawned is logged, and the exec it reported still runs to completion', async () => {
+    const f = fake({ stdoutFixture: fixturePath('p0-success-trivial.jsonl') });
+    const result = await transport(f).oneShot('prompt', ctxFor(f, {
+      onSpawned: () => { throw new Error('counter exploded'); },
+    }));
+    expect(result.text).toBe('<ok/>');
+    expect(result.exitCode).toBe(0);
+  }, SPAWN_TEST_TIMEOUT_MS);
+});
+
 describe('runner error messages', () => {
   // Runs last in this file (bun keeps declaration order) over every message collected above.
   it('never contain "code 143" or "signal SIGTERM" (SessionRoutes external-kill markers)', () => {

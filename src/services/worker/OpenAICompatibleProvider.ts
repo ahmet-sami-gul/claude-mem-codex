@@ -1,10 +1,17 @@
 import { DatabaseManager } from './DatabaseManager.js';
-import { SessionManager } from './SessionManager.js';
+import { SessionManager, type ObservationBatchPolicy } from './SessionManager.js';
 import { logger } from '../../utils/logger.js';
 import { SettingsDefaultsManager, type SettingsDefaults } from '../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../shared/paths.js';
-import { buildInitPrompt, buildObservationPrompt, buildSummaryPrompt, buildContinuationPrompt } from '../../sdk/prompts.js';
-import type { ActiveSession, ConversationMessage } from '../worker-types.js';
+import {
+  buildInitPrompt,
+  buildObservationPrompt,
+  buildObservationBatchPrompt,
+  buildSummaryPrompt,
+  buildContinuationPrompt,
+  type Observation,
+} from '../../sdk/prompts.js';
+import type { ActiveSession, ConversationMessage, PendingMessageWithId } from '../worker-types.js';
 import { ModeManager } from '../domain/ModeManager.js';
 import type { ModeConfig } from '../domain/types.js';
 import { resolveSummaryTierModel } from './model-aliases.js';
@@ -24,6 +31,9 @@ import {
   snapshotResponseContext,
   type WorkerRef
 } from './agents/index.js';
+
+/** Re-exported for providers that override observationBatchPolicy. */
+export type { ObservationBatchPolicy } from './SessionManager.js';
 
 /**
  * Normalized result returned by a concrete provider's `query()`.
@@ -88,10 +98,14 @@ export interface ProviderQueryContext {
  *
  * A second family of members — the opt-in hooks below (`isConfigured`,
  * `wantsQueryContext`, `fieldCompressor`, `resolveSummaryModel`,
- * `adoptForeignMemorySessionId`, `conversationMaxChars`) — exists for
- * providers that are not HTTP-and-a-key, such as a local CLI. Every one of
- * them defaults to what this class did before the hook existed, so a provider
- * that overrides nothing behaves identically to how it behaved without them.
+ * `adoptForeignMemorySessionId`, `conversationMaxChars`, and the M4 cost hooks
+ * `deferInitQuery`, `freshGenerationOnStart`, `observationBatchPolicy`,
+ * `buildObservationTurn`) — exists for providers that are not
+ * HTTP-and-a-key, such as a local CLI where every call is one metered plan
+ * message. Every one of them defaults to what this class did before the hook
+ * existed, so a provider that overrides nothing behaves identically to how it
+ * behaved without them: same queries, same prompt bytes, same claim/confirm
+ * sequence (pinned by tests/worker/provider-prompt-snapshots.test.ts).
  */
 export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBase> {
   protected dbManager: DatabaseManager;
@@ -127,6 +141,37 @@ export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBas
    * and anything else is superseded by a freshly generated one.
    */
   protected readonly adoptForeignMemorySessionId: boolean = false;
+  /**
+   * Skip the standalone init query (M4, plan hook 8).
+   *
+   * False — the default — sends the init/continuation prompt on its own and
+   * records the reply as an assistant turn, exactly as before. True sends
+   * nothing at start: the init turn stays at the head of the history and
+   * becomes the stable first turn of the first real call. Nothing is lost —
+   * the init reply is never stored (see handleInitResponse) — and for a
+   * provider where every call is a paid plan message it saves one per
+   * generator start. A generator that ends before any work arrives then costs
+   * nothing at all.
+   */
+  protected readonly deferInitQuery: boolean = false;
+  /**
+   * Start every generator from an empty conversation (M4, plan hook 9).
+   *
+   * False — the default — keeps whatever conversation the session still holds
+   * (a generator restarted after a quota/auth/transport pause keeps its old
+   * turns) and appends the new init turn to it, as before. True drops it first:
+   * continuity comes from the session-start context the init turn is seeded
+   * with (loadSessionStartContext), not from re-sending old turns — which a
+   * provider that pays for every input token on every call cannot afford.
+   */
+  protected readonly freshGenerationOnStart: boolean = false;
+
+  /**
+   * Called once per generator start whose init query `deferInitQuery` skipped
+   * (the call it saved). Default: nothing. Only reachable with
+   * `deferInitQuery` true, so a provider that does not defer never gets here.
+   */
+  protected onInitQueryDeferred(_session: ActiveSession): void {}
 
   constructor(dbManager: DatabaseManager, sessionManager: SessionManager) {
     this.dbManager = dbManager;
@@ -296,6 +341,37 @@ export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBas
     );
   }
 
+  /**
+   * How to batch consecutive observations into one turn (M4, plan hook 10), or
+   * null for one turn per observation.
+   *
+   * Default: null, i.e. exactly the old loop — the drain yields a message, it
+   * is answered, confirmed, and the next one is yielded. With a policy, each
+   * observation the drain yields is grown into a batch through
+   * SessionManager.claimObservationBatch (same prompt, agent and cwd; FIFO;
+   * count and character budgets; a short linger when the queue is idle), the
+   * batch is sent as ONE turn built by buildObservationTurn, and the whole
+   * claimed set is confirmed — or reset to pending — together.
+   */
+  protected observationBatchPolicy(_config: TConfig): ObservationBatchPolicy | null {
+    return null;
+  }
+
+  /**
+   * The user turn for the observations being sent now (one, or a batch).
+   *
+   * Default: a lone observation is buildObservationPrompt — byte-identical to
+   * what this class always sent — and a batch (only possible with an
+   * observationBatchPolicy) is buildObservationBatchPrompt, so a provider that
+   * turns batching on without overriding this still sends every observation it
+   * claimed.
+   */
+  protected buildObservationTurn(observations: readonly Observation[]): string {
+    return observations.length === 1
+      ? buildObservationPrompt(observations[0])
+      : buildObservationBatchPrompt(observations);
+  }
+
   async startSession(session: ActiveSession, worker?: WorkerRef): Promise<void> {
     const config = this.getConfig();
     const { model } = config;
@@ -357,26 +433,40 @@ export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBas
       ? buildInitPrompt(session.project, session.contentSessionId, session.userPrompt, mode, priorContext)
       : buildContinuationPrompt(session.userPrompt, session.lastPromptNumber, session.contentSessionId, mode, priorContext);
 
+    if (this.freshGenerationOnStart) {
+      // A new generation: the turns a paused run left behind are not re-sent.
+      // What they established is already in priorContext, above.
+      session.conversationHistory = [];
+    }
     session.conversationHistory.push({ role: 'user', content: initPrompt });
 
-    try {
-      session.lastPromptSentAt = Date.now();
-      session.lastGeneratorSource = 'init';
-      const initResponse = await this.invokeQuery(
-        session.conversationHistory, config, undefined, { purpose: 'init', session },
-      );
-      this.handleInitResponse(initResponse, session, model);
-    } catch (error: unknown) {
-      // Classified errors are logged once, at SessionRoutes' `Observer failed`
-      // line; here they're debug-level so one failure isn't five error lines.
-      if (isClassified(error)) {
-        logger.debug('SDK', `${this.providerName} init query failed`, { sessionId: session.sessionDbId, model, kind: error.kind }, error);
-      } else if (error instanceof Error) {
-        logger.error('SDK', `${this.providerName} init query failed`, { sessionId: session.sessionDbId, model }, error);
-      } else {
-        logger.error('SDK', `${this.providerName} init query failed with non-Error`, { sessionId: session.sessionDbId, model }, new Error(String(error)));
+    if (this.deferInitQuery) {
+      // No standalone init call: the init turn rides along as the first turn
+      // of the first real call. Its reply would never have been stored anyway.
+      logger.debug('SDK', `${this.providerName} init query deferred to the first observation or summary`, {
+        sessionId: session.sessionDbId, model
+      });
+      this.onInitQueryDeferred(session);
+    } else {
+      try {
+        session.lastPromptSentAt = Date.now();
+        session.lastGeneratorSource = 'init';
+        const initResponse = await this.invokeQuery(
+          session.conversationHistory, config, undefined, { purpose: 'init', session },
+        );
+        this.handleInitResponse(initResponse, session, model);
+      } catch (error: unknown) {
+        // Classified errors are logged once, at SessionRoutes' `Observer failed`
+        // line; here they're debug-level so one failure isn't five error lines.
+        if (isClassified(error)) {
+          logger.debug('SDK', `${this.providerName} init query failed`, { sessionId: session.sessionDbId, model, kind: error.kind }, error);
+        } else if (error instanceof Error) {
+          logger.error('SDK', `${this.providerName} init query failed`, { sessionId: session.sessionDbId, model }, error);
+        } else {
+          logger.error('SDK', `${this.providerName} init query failed with non-Error`, { sessionId: session.sessionDbId, model }, new Error(String(error)));
+        }
+        return this.handleSessionError(error, session, worker);
       }
-      return this.handleSessionError(error, session, worker);
     }
 
     try {
@@ -450,7 +540,7 @@ export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBas
 
   private async processObservationMessage(
     session: ActiveSession,
-    message: { prompt_number?: number; tool_name?: string; tool_input?: unknown; tool_response?: unknown; cwd?: string },
+    message: PendingMessageWithId,
     worker: WorkerRef | undefined,
     config: TConfig,
     originalTimestamp: number | null,
@@ -459,6 +549,16 @@ export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBas
     if (message.prompt_number !== undefined) {
       session.lastPromptNumber = message.prompt_number;
     }
+    // Where the reply is filed (project, prompt number, agent), taken NOW —
+    // from this message, which runMessageLoop just applied to the session —
+    // and before any await. The batch linger and the field compression below
+    // both yield, and a new user prompt arriving meanwhile re-initializes the
+    // live session (SessionManager.initializeSession overwrites
+    // lastPromptNumber and project); a snapshot taken after that would file
+    // this prompt's observations under the next one. Every observation in a
+    // batch shares this message's prompt, agent and cwd (sameObservationGroup),
+    // so one context is right for all of them.
+    const responseContext = snapshotResponseContext(session);
 
     if (!session.memorySessionId) {
       throw new Error('Cannot process observations: memorySessionId not yet captured. This session may need to be reinitialized.');
@@ -478,27 +578,64 @@ export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBas
       return;
     }
 
+    // Opt-in batching (M4): grow this observation into a batch of consecutive
+    // ones from the same prompt/agent/cwd. Every id claimed here joins
+    // session.claimedMessageIds, so the store below confirms the whole batch
+    // and any failure resets the whole batch to pending. Without a policy the
+    // batch is just this message, exactly as before.
+    const batchPolicy = this.observationBatchPolicy(config);
+    const batch = batchPolicy
+      ? await this.sessionManager.claimObservationBatch(session.sessionDbId, message, batchPolicy)
+      : [message];
+    if (batchPolicy && session.abortController.signal.aborted) {
+      // Aborted while lingering for the rest of a burst (shutdown, a pause
+      // raised elsewhere): do not start a call for a generator that is ending.
+      // The claimed batch stays unconfirmed and the next generator re-yields it.
+      return;
+    }
+
     // An oversized payload is condensed by a bounded model pass before the
     // prompt is built, so the observation carries a summary of the whole field
     // rather than a head/tail slice with the middle cut out (#3800).
     const compressor = this.fieldCompressor(config, session);
-    const optimized = compressor
-      ? await optimizeObservationFields(
-          { toolInput: message.tool_input, toolOutput: message.tool_response },
-          compressor,
-          { sessionDbId: session.sessionDbId, toolName: message.tool_name },
-        )
-      : { toolInput: message.tool_input, toolOutput: message.tool_response };
+    const observations: Observation[] = [];
+    for (const item of batch) {
+      if (batchPolicy && compressor && session.abortController.signal.aborted) {
+        // Aborted between two batch members' compression passes (shutdown, a
+        // pause raised elsewhere): each pass can be a paid call of its own, so
+        // stop here instead of compressing the rest of a batch that will not
+        // be sent. As above, the claimed batch is re-yielded by the next
+        // generator. Batching only: the single-observation path is unchanged.
+        return;
+      }
+      const optimized = compressor
+        ? await optimizeObservationFields(
+            { toolInput: item.tool_input, toolOutput: item.tool_response },
+            compressor,
+            { sessionDbId: session.sessionDbId, toolName: item.tool_name },
+          )
+        : { toolInput: item.tool_input, toolOutput: item.tool_response };
 
-    const obsPrompt = buildObservationPrompt({
-      id: 0,
-      tool_name: message.tool_name!,
-      tool_input: JSON.stringify(optimized.toolInput),
-      tool_output: JSON.stringify(optimized.toolOutput),
-      created_at_epoch: originalTimestamp ?? Date.now(),
-      cwd: message.cwd
-    });
-    const responseContext = snapshotResponseContext(session);
+      observations.push({
+        id: 0,
+        tool_name: item.tool_name!,
+        tool_input: JSON.stringify(optimized.toolInput),
+        tool_output: JSON.stringify(optimized.toolOutput),
+        // A batched turn dates each tool use by its OWN enqueue time; the
+        // single-observation path keeps the session's earliest pending time,
+        // as it always has.
+        created_at_epoch: batchPolicy && typeof item._originalTimestamp === 'number'
+          ? item._originalTimestamp
+          : originalTimestamp ?? Date.now(),
+        cwd: item.cwd
+      });
+    }
+
+    const obsPrompt = this.buildObservationTurn(observations);
+    // The stored rows are stamped with the earliest claimed enqueue time. The
+    // batch claim may have moved it; without a policy it is what the caller
+    // passed in.
+    const storeTimestamp = batchPolicy ? session.earliestPendingTimestamp ?? originalTimestamp : originalTimestamp;
 
     session.conversationHistory.push({ role: 'user', content: obsPrompt });
     session.lastPromptSentAt = Date.now();
@@ -523,7 +660,7 @@ export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBas
     if (obsResponse.content || this.forwardEmptyMessageResponse) {
       await processAgentResponse(
         obsResponse.content || '', session, this.dbManager, this.sessionManager,
-        worker, tokensUsed, originalTimestamp, this.providerName, lastCwd, obsResponse.servedModel ?? config.model, responseContext
+        worker, tokensUsed, storeTimestamp, this.providerName, lastCwd, obsResponse.servedModel ?? config.model, responseContext
       );
     } else {
       logger.warn('SDK', `Empty ${this.providerName} observation response, leaving queue intact`, {

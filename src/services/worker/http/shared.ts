@@ -8,6 +8,7 @@ import { isProjectExcluded } from '../../../utils/project-filter.js';
 import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
 import { getProjectContext } from '../../../utils/project-name.js';
+import { isObserverSessionCwd } from '../../../shared/should-track-project.js';
 import { normalizePlatformSource } from '../../../shared/platform-source.js';
 import { PrivacyCheckValidator } from '../validation/PrivacyCheckValidator.js';
 import { captureEvent } from '../../telemetry/telemetry.js';
@@ -69,6 +70,17 @@ export async function ingestObservation(payload: ObservationPayload): Promise<In
 
   const platformSource = normalizePlatformSource(payload.platformSource);
   const cwd = typeof payload.cwd === 'string' ? payload.cwd : '';
+
+  // The observer's own jail (M4, plan 3.10): a tool event from inside
+  // OBSERVER_SESSIONS_DIR is the memory observer's activity, not the user's.
+  // Hooks already skip it (shouldTrackProject), but this is the one choke
+  // point every ingest path shares — the PostToolUse route AND the transcript
+  // processor's direct call — so the guard lives here too, before anything is
+  // created, stored or queued.
+  if (cwd && isObserverSessionCwd(cwd)) {
+    return { ok: true, status: 'skipped', reason: 'observer_session' };
+  }
+
   const project = cwd.trim() ? getProjectContext(cwd).primary : '';
 
   const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);

@@ -222,7 +222,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_CODEX_VERBOSITY: 'low',  // The only output-length lever codex exposes
     CLAUDE_MEM_CODEX_TIMEOUT_MS: '180000',  // Per-exec deadline (30000-600000), independent of CLAUDE_MEM_LLM_TIMEOUT_MS
     CLAUDE_MEM_CODEX_MAX_CONVERSATION_CHARS: '120000',  // Codex-specific recycle budget (40000-400000)
-    CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS: '4',  // Contiguous observations per exec (1-12); batching itself lands in M4
+    CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS: '4',  // Contiguous observations per exec (1-12); 1 disables batching (same prompt/agent/cwd, FIFO)
     CLAUDE_MEM_CODEX_BATCH_MAX_CHARS: '48000',  // New envelope characters per batch (8000-96000)
     CLAUDE_MEM_CODEX_BATCH_LINGER_MS: '2000',  // Wait for one more event only while the queue is empty (0-30000)
     CLAUDE_MEM_CODEX_FIELD_COMPRESSION: 'false',  // false = use the prompt's head/tail elision instead of a second exec per field

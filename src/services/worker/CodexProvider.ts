@@ -21,9 +21,21 @@
  *     (`adoptForeignMemorySessionId`), so switching a live session onto Codex
  *     cannot cascade a re-key storm through the observation rows.
  *
- * The quota circuit is now installed on that seam (M3,
- * `codexQuotaCircuitPreflight`). NOT here yet, by design: the local 5-hour exec
- * budget and batching (M4).
+ * The M4 cost levers, each of which cuts plan messages AND tokens whatever the
+ * plan meters:
+ *
+ *   - `deferInitQuery`: no standalone init exec; the init turn is the stable
+ *     head of the first real call (one exec saved per generator start);
+ *   - `freshGenerationOnStart`: a restarted generator does not re-send the
+ *     turns a paused run left behind (continuity comes from the session-start
+ *     context the init turn carries);
+ *   - batching (`observationBatchPolicy`, CLAUDE_MEM_CODEX_BATCH_*): consecutive
+ *     observations of one prompt/agent/cwd share one exec;
+ *   - the local 5-hour exec budget (codex-budget.ts,
+ *     CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H), composed onto the pre-flight seam
+ *     AFTER the M3 quota circuit, so a spent budget pauses and resumes through
+ *     the same breaker and scheduler as a real usage limit;
+ *   - counters for all of the above (codex-metrics.ts), on /api/health.
  */
 
 import { DatabaseManager } from './DatabaseManager.js';
@@ -35,14 +47,30 @@ import type { ActiveSession, ConversationMessage } from '../worker-types.js';
 import { ClassifiedProviderError, isClassified } from './provider-errors.js';
 import {
   OpenAICompatibleProvider,
+  type ObservationBatchPolicy,
   type ProviderConfigBase,
   type ProviderQueryContext,
   type ProviderQueryResult,
 } from './OpenAICompatibleProvider.js';
 import type { WorkerRef } from './agents/index.js';
-import type { FieldCompressor } from './field-optimizer.js';
+import { countFieldsNeedingCompression, type FieldCompressor } from './field-optimizer.js';
+import { buildObservationBatchPrompt, type Observation } from '../../sdk/prompts.js';
+import {
+  CODEX_LOCAL_BUDGET_CODE,
+  getCodexExecBudget,
+  type CodexBudgetSnapshot,
+  type CodexExecBudget,
+  type CodexExecTicket,
+} from './codex/codex-budget.js';
+import { codexMetrics, type CodexMetrics, type CodexMetricsSnapshot } from './codex/codex-metrics.js';
 import { findCodexExecutable } from '../../shared/find-codex-executable.js';
-import { checkQuotaHold, touchQuotaProbe } from '../../shared/quota-cooldown.js';
+import {
+  checkQuotaHold,
+  clearQuotaCooldown,
+  getQuotaCooldown,
+  quotaCooldownResumeAtMs,
+  touchQuotaProbe,
+} from '../../shared/quota-cooldown.js';
 import {
   codexViolationTracker,
   ExecTransport,
@@ -135,16 +163,105 @@ export interface CodexPreflightContext {
  * ClassifiedProviderError (quota_exhausted with a retryAfterMs / resumeAtMs) to
  * refuse the call without paying for it.
  *
- * The default is `codexQuotaCircuitPreflight` (M3). M4 composes the local
- * 5-hour exec budget with it rather than replacing it.
+ * The provider runs `composeCodexPreflights(circuit, budget)`: the M3 quota
+ * circuit (`codexQuotaCircuitPreflight`, or the injected `preflight` option)
+ * first, then the M4 local 5-hour exec budget (`codexLocalBudgetPreflight`).
  *
- * It runs TWICE per call: once before the prompt is rendered, and again after
- * the transport's pool slot is granted, immediately before the spawn
- * (`CodexTurnContext.beforeSpawn`). So it must be a check, not a reservation:
- * anything it counts has to be counted where the exec actually happens, or
- * every call would be counted twice.
+ * It runs TWICE per call: once before the prompt is rendered — i.e. before the
+ * transport waits for a pool slot — and again after the slot is granted,
+ * immediately before the spawn (`CodexTurnContext.beforeSpawn`). So it must be
+ * a check, not a reservation: anything it counts has to be counted where the
+ * exec actually happens (`CodexTurnContext.onSpawned`), or every call would be
+ * counted twice. Kept synchronous where it can be, so the second run, the
+ * spawn and the count happen in one synchronous block.
  */
 export type CodexPreflightCheck = (config: CodexConfig, ctx: CodexPreflightContext) => void | Promise<void>;
+
+function isPromiseLike(value: unknown): value is PromiseLike<void> {
+  return typeof (value as PromiseLike<void> | null | undefined)?.then === 'function';
+}
+
+/**
+ * Run pre-flight checks in order; the first refusal wins and the later ones
+ * are not consulted. Synchronous as long as every check is (the runner then
+ * checks and spawns without yielding); an async check makes the rest wait for
+ * it.
+ */
+export function composeCodexPreflights(...checks: CodexPreflightCheck[]): CodexPreflightCheck {
+  return (config, ctx) => {
+    for (let index = 0; index < checks.length; index += 1) {
+      const outcome = checks[index](config, ctx);
+      if (isPromiseLike(outcome)) {
+        const rest = checks.slice(index + 1);
+        return Promise.resolve(outcome).then(async () => {
+          for (const check of rest) await check(config, ctx);
+        });
+      }
+    }
+    return undefined;
+  };
+}
+
+/**
+ * The local 5-hour exec budget as a pre-flight check (M4, plan 3.3): refuses
+ * with quota_exhausted / `local_budget` / an exact `retryAfterMs` once
+ * CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H execs are counted in the window (0 =
+ * unlimited). Read-only; the exec is counted by the provider at spawn time.
+ *
+ * `limitOf` says what the limit is AT CHECK TIME. The provider passes a
+ * resolver that re-reads the setting on every check, because the config a
+ * generator was started with lives as long as the generator does (hours, on a
+ * busy session) — a lowered or newly enabled limit has to bind the running
+ * generators at once, not their successors. Synchronous, so the pre-spawn
+ * check, the spawn and the count stay one synchronous block. Defaults to the
+ * config's own value.
+ *
+ * The refusal is deliberately NOT one of CODEX_QUOTA_CIRCUIT_CODES: the route
+ * books it like a real usage limit — breaker armed until the window slides,
+ * banner, scheduled probe — which is how a spent budget resumes on its own
+ * without dropping the buffered observations.
+ */
+export function codexLocalBudgetPreflight(
+  budget: CodexExecBudget,
+  metrics?: CodexMetrics,
+  limitOf: (config: CodexConfig) => number = config => config.maxExecsPer5h,
+): CodexPreflightCheck {
+  return (config) => {
+    try {
+      budget.assertWithinBudget(limitOf(config));
+    } catch (error: unknown) {
+      metrics?.recordBudgetRefusal();
+      throw error;
+    }
+  };
+}
+
+/**
+ * CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H as it stands in settings right now, with
+ * the same bounds and warn-once fallback as getConfig. Cheap (a settings read,
+ * no binary resolution) and never throws, so the budget can be re-read at
+ * every check rather than frozen per generator.
+ */
+export function resolveCodexMaxExecsPer5h(): number {
+  return clampedInt(
+    'CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H',
+    SettingsDefaultsManager.loadFromFile(paths.settings()).CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H,
+    CODEX_CONFIG_BOUNDS.maxExecsPer5h,
+  );
+}
+
+/**
+ * Classified failures that will fail the SAME way for every further call in
+ * this turn: once a compression call earns one, the remaining fields of the
+ * turn go straight to the prompt's truncation instead of spawning (and paying
+ * for) the same refusal again.
+ */
+const STICKY_COMPRESSION_FAILURE_KINDS: ReadonlySet<string> = new Set([
+  'quota_exhausted',
+  'rate_limit',
+  'auth_invalid',
+  'setup_required',
+]);
 
 /**
  * The codes the quota circuit stamps on its OWN refusals, as opposed to a
@@ -196,7 +313,7 @@ export const codexQuotaCircuitPreflight: CodexPreflightCheck = (_config, ctx): v
   if (!hold.held) {
     // The single probe is being let through on its own claim: it is alive and
     // spending, so keep its claim fresh. Without this a slow but healthy probe
-    // (an init exec plus an observation exec, each up to the Codex timeout)
+    // (several execs in a row as it drains its backlog, each up to the Codex timeout)
     // outlives QUOTA_PROBE_STALE_MS and a second paid probe takes it over
     // while the first is still running. A no-op for every other caller.
     touchQuotaProbe('codex', claimId);
@@ -225,8 +342,16 @@ export const codexQuotaCircuitPreflight: CodexPreflightCheck = (_config, ctx): v
 export interface CodexProviderOptions {
   /** Defaults to the stateless `codex exec --ephemeral --json` transport. */
   transport?: CodexTransport;
-  /** M3/M4 quota-circuit + local-budget seam; defaults to `codexQuotaCircuitPreflight`. */
+  /**
+   * The M3 quota-circuit seam; defaults to `codexQuotaCircuitPreflight`. The
+   * local exec budget is always composed AFTER it (see CodexPreflightCheck),
+   * whatever is injected here.
+   */
   preflight?: CodexPreflightCheck;
+  /** The 5-hour exec budget; defaults to the process-wide one over DATA_DIR/codex-usage.json. */
+  budget?: CodexExecBudget;
+  /** Counters; defaults to the process-wide `codexMetrics` /api/health reads. */
+  metrics?: CodexMetrics;
   /**
    * Starts (or joins) the lockdown self-check for a binary. The default fires
    * `verifyCodexLockdown` and does not await it: the check is single-flight and
@@ -384,11 +509,45 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
    * and can trigger a requeue storm; the id only has to be stable, not ours.
    */
   protected readonly adoptForeignMemorySessionId = true;
+  /**
+   * M4 hook 8: no standalone init exec. The init turn stays at the head of
+   * the conversation and is sent as the stable first turn of the first real
+   * call; its reply was never stored anyway. One plan message saved per
+   * generator start, and a start with no work costs nothing.
+   */
+  protected readonly deferInitQuery = true;
+  /**
+   * M4 hook 9: every generator starts from an empty conversation. After a
+   * quota/auth/transport pause the old turns are not re-sent at full input
+   * price on every call; continuity comes from the session-start context
+   * (loadSessionStartContext) the new init turn is seeded with.
+   */
+  protected readonly freshGenerationOnStart = true;
 
   private readonly transport: CodexTransport;
   private readonly preflight: CodexPreflightCheck;
+  private readonly budget: CodexExecBudget;
+  private readonly metrics: CodexMetrics;
   private readonly startSelfCheck: (binaryPath: string, options: VerifyCodexLockdownOptions) => void;
   private readonly runSelfCheck: (binaryPath: string, options: VerifyCodexLockdownOptions) => Promise<CodexLockdownResult>;
+  /**
+   * The observation turn buildObservationTurn produced last: how many tool uses
+   * it carries, and how many oversized fields in it went to the prompt's
+   * truncation instead of a compression exec. The base class builds the turn
+   * and hands it to query() in one synchronous stretch, so query() can tell
+   * what the call it is making carries by recognising its own prompt as the
+   * last history entry — and the metrics record both numbers only once that
+   * call's exec is actually spawned (a refused or rebuilt turn counts nothing).
+   */
+  private lastObservationTurn: { prompt: string; observations: number; skippedFields: number } | null = null;
+  /**
+   * Sessions whose current generation deferred its init exec (hook 8) and has
+   * not yet spawned the first real call that carries the init turn. The saved
+   * exec is counted when that call spawns: a generator refused on its first
+   * call (quota, local budget) or ended before any work never had an init exec
+   * to save — without the M4 lever it would have been refused or idle too.
+   */
+  private readonly deferredInitPending = new Set<number>();
 
   constructor(dbManager: DatabaseManager, sessionManager: SessionManager, options: CodexProviderOptions = {}) {
     super(dbManager, sessionManager);
@@ -397,7 +556,20 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
         CLAUDE_MEM_CODEX_HOME: SettingsDefaultsManager.loadFromFile(paths.settings()).CLAUDE_MEM_CODEX_HOME,
       }),
     });
-    this.preflight = options.preflight ?? codexQuotaCircuitPreflight;
+    this.budget = options.budget ?? getCodexExecBudget();
+    this.metrics = options.metrics ?? codexMetrics;
+    // Circuit first, budget second (plan 3.3): a call the breaker withholds is
+    // not a budget refusal, and the budget is never consulted for it. The
+    // default circuit first lifts a hold the local budget armed and no longer
+    // justifies (a raised limit mid-pause); an injected circuit is used as is.
+    // The budget's limit is re-read at every check (resolveCodexMaxExecsPer5h).
+    this.preflight = composeCodexPreflights(
+      options.preflight ?? composeCodexPreflights(
+        () => { this.releaseStaleLocalBudgetHold(); },
+        codexQuotaCircuitPreflight,
+      ),
+      codexLocalBudgetPreflight(this.budget, this.metrics, () => resolveCodexMaxExecsPer5h()),
+    );
     this.startSelfCheck = options.startSelfCheck ?? ((binaryPath, verifyOptions) => {
       // Fire and forget: verifyCodexLockdown is single-flight, caches its
       // result per binary fingerprint, and never rejects. Nothing awaits it,
@@ -663,11 +835,53 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
    * instead. CLAUDE_MEM_CODEX_FIELD_COMPRESSION=true restores the shared pass.
    */
   protected fieldCompressor(config: CodexConfig, session?: ActiveSession): FieldCompressor | null {
+    if (!config.fieldCompression) return null;
     // `session` is forwarded, not ignored: a compression turn is a whole exec,
     // and an exec with no session runs in the shared jail directory, registers
     // under a sessionDbId no session owns, and shares one lockdown-violation
     // counter with every other session's compression turns.
-    return config.fieldCompression ? super.fieldCompressor(config, session) : null;
+    const compress = super.fieldCompressor(config, session);
+    if (!compress) return null;
+
+    // The base class asks for one compressor per observation turn, so this
+    // state is per turn. A null answer is the optimizer's documented "fall back
+    // to the prompt's truncation": the observation is degraded, never lost.
+    let stickyFailure: string | null = null;
+    let inFlight = 0;
+    return async (text, budgetChars, signal) => {
+      // A refusal that will repeat for every further call (a spent allowance or
+      // local budget, a lost login): do not spawn it again for the next field.
+      if (stickyFailure) return null;
+      if (session?.abortController.signal.aborted) return null;
+      // Never let a compression take the exec the observation turn itself
+      // needs. Without this reserve, a window with one exec left spends it on
+      // the compression, the observation is refused, and every later slide of
+      // the window repeats that — plan messages spent, nothing ever stored.
+      // Calls of this turn already started count against the room too
+      // (conservatively: a spawned one is also in usedInWindow until it ends).
+      const limit = resolveCodexMaxExecsPer5h();
+      if (limit > 0 && limit - this.budget.usedInWindow() - inFlight < 2) {
+        logger.debug('SDK', 'Codex field compression skipped: the exec budget has room only for the observation turn', {
+          sessionId: session?.sessionDbId,
+          limit,
+        });
+        return null;
+      }
+      inFlight += 1;
+      try {
+        // The optimizer's own deadline signal, plus the session's: a compression
+        // pass must not outlive a session that is shutting down or pausing.
+        const combined = session ? AbortSignal.any([signal, session.abortController.signal]) : signal;
+        return await compress(text, budgetChars, combined);
+      } catch (error: unknown) {
+        if (isClassified(error) && STICKY_COMPRESSION_FAILURE_KINDS.has(error.kind)) {
+          stickyFailure = error.kind;
+        }
+        throw error;
+      } finally {
+        inFlight -= 1;
+      }
+    };
   }
 
   /**
@@ -695,6 +909,118 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
   }
 
   /**
+   * M4 hook 10: consecutive observations of one prompt/agent/cwd share one
+   * exec, within CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS (default 4) and
+   * CLAUDE_MEM_CODEX_BATCH_MAX_CHARS (48,000 rendered characters), lingering up
+   * to CLAUDE_MEM_CODEX_BATCH_LINGER_MS (2 s) only while the queue is idle.
+   * A maximum of 1 turns batching off entirely: no policy, so the base class
+   * runs its original one-observation-per-turn loop.
+   */
+  protected observationBatchPolicy(config: CodexConfig): ObservationBatchPolicy | null {
+    if (config.batchMaxObservations <= 1) return null;
+    return {
+      maxMessages: config.batchMaxObservations,
+      maxChars: config.batchMaxChars,
+      lingerMs: config.batchLingerMs,
+    };
+  }
+
+  /**
+   * The observation turn: buildObservationBatchPrompt, which is byte-for-byte
+   * buildObservationPrompt for a single observation. Also where the metrics
+   * learn what the turn carries — its batch size, and (with field compression
+   * off, the default) how many oversized fields went to the prompt's own
+   * truncation instead of a compression exec each.
+   */
+  protected buildObservationTurn(observations: readonly Observation[]): string {
+    const prompt = buildObservationBatchPrompt(observations);
+    let skippedFields = 0;
+    if (!this.getConfig().fieldCompression) {
+      for (const observation of observations) {
+        skippedFields += countFieldsNeedingCompression(
+          { toolInput: decodeObservationField(observation.tool_input), toolOutput: decodeObservationField(observation.tool_output) },
+          { toolName: observation.tool_name },
+        );
+      }
+    }
+    // Recorded by query() once this turn's exec is spawned, not here: the turn
+    // may yet be refused before any exec (circuit, local budget) and rebuilt
+    // after the pause, and neither may count as a compression exec saved.
+    this.lastObservationTurn = { prompt, observations: observations.length, skippedFields };
+    return prompt;
+  }
+
+  /**
+   * deferInitQuery skipped this generation's init exec. Counted as saved once
+   * the first real call carrying the init turn is spawned (see
+   * deferredInitPending); a new generation simply re-arms the same flag.
+   */
+  protected onInitQueryDeferred(session: ActiveSession): void {
+    this.deferredInitPending.add(session.sessionDbId);
+  }
+
+  /**
+   * Lift a quota hold that the LOCAL exec budget armed and no longer
+   * justifies; returns whether it did.
+   *
+   * A local_budget refusal is booked into the shared quota breaker with the
+   * resume time the limit in force at the time implied (up to five hours
+   * out), and the breaker is persisted. When the user then raises
+   * CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H, sets it to 0, or resets codex-usage.json,
+   * the budget allows execs again but nothing else would consult it before
+   * that stale time. So while such a hold is still in its cooldown, it is
+   * checked against the budget as it stands now, and cleared when the budget
+   * has room — which also drains every session that waited on it (the resume
+   * scheduler listens for the clear). A hold with any other cause, or one
+   * whose window has already elapsed (the ordinary single probe handles that),
+   * is left alone. Read-only against the budget; never spends.
+   */
+  releaseStaleLocalBudgetHold(nowMs: number = Date.now()): boolean {
+    const state = getQuotaCooldown('codex');
+    if (!state || state.code !== CODEX_LOCAL_BUDGET_CODE) return false;
+    if (nowMs >= quotaCooldownResumeAtMs(state)) return false;
+    const limit = resolveCodexMaxExecsPer5h();
+    const used = this.budget.usedInWindow();
+    if (limit > 0 && used >= limit) return false;
+    logger.info('SDK', 'The local Codex exec budget has room again; lifting its pause early', {
+      limit,
+      used,
+      heldUntil: new Date(quotaCooldownResumeAtMs(state)).toISOString(),
+    });
+    clearQuotaCooldown('codex');
+    return true;
+  }
+
+  /**
+   * What /api/health shows for codex (`ai.codex`): the 5-hour budget as it
+   * stands and the process's counters. Counts and timestamps only.
+   */
+  getUsageStatus(): { budget: CodexBudgetSnapshot; metrics: CodexMetricsSnapshot } {
+    let limit = 0;
+    try {
+      // The same live read the budget check itself uses.
+      limit = resolveCodexMaxExecsPer5h();
+    } catch (error: unknown) {
+      logger.debug('SDK', 'Could not read the Codex exec budget setting for status', {}, error instanceof Error ? error : new Error(String(error)));
+    }
+    return { budget: this.budget.snapshot(limit), metrics: this.metrics.snapshot() };
+  }
+
+  /**
+   * The native codex binary this provider would spawn, resolved exactly as
+   * every exec resolves it (memoized), or null. The boot-time orphan cleanup
+   * matches registry records against it.
+   */
+  resolvedBinaryPath(): string | null {
+    return this.getConfig().binaryPath;
+  }
+
+  /** Write pending token counts to codex-usage.json now (worker shutdown). */
+  flushUsage(): void {
+    this.budget.flush();
+  }
+
+  /**
    * The generator run, plus the one piece of per-run state this provider owns:
    * the lockdown violation counter.
    *
@@ -711,6 +1037,9 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
       await super.startSession(session, worker);
     } finally {
       this.violations().clear(session.sessionDbId);
+      // A generation that ended before any call carrying its init turn was
+      // spawned saved nothing (see deferredInitPending).
+      this.deferredInitPending.delete(session.sessionDbId);
     }
   }
 
@@ -741,6 +1070,12 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
     const session = ctx?.session;
     const purpose = codexPurpose(ctx?.purpose);
     const sessionDbId = session?.sessionDbId ?? ctx?.sessionDbId ?? 0;
+    // Read (and forgotten) before the first await: the turn was built and
+    // pushed in the same synchronous stretch that called us.
+    const observationTurn = purpose === 'observation' ? this.takeObservationTurn(history) : null;
+    // Only these two calls carry the conversation, and so the deferred init
+    // turn at its head; compression and the wrap-up are single-message calls.
+    const carriesInitTurn = session !== undefined && (purpose === 'observation' || purpose === 'summary');
 
     if (!config.binaryPath) {
       const error = this.missingApiKeyError();
@@ -762,6 +1097,9 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
     // call; every other call is cancelled through the session's own controller.
     const abortSignal = signal ?? session?.abortController.signal;
     const preflightContext: CodexPreflightContext = { sessionDbId, purpose, ...(session ? { session } : {}) };
+    // Set by onSpawned; a holder rather than a `let` because the assignment
+    // happens inside the transport, where control-flow narrowing cannot see it.
+    const spawned: { ticket: CodexExecTicket | null } = { ticket: null };
     const turnContext: CodexTurnContext = {
       sessionDbId,
       purpose,
@@ -779,8 +1117,25 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
       // has already passed the circuit, and without this each would spawn its
       // own exec and earn its own usage-limit refusal the moment a slot frees
       // — the per-call storm the circuit exists to stop. A throw here comes
-      // back out of oneShot with the slot released and nothing spawned.
+      // back out of oneShot with the slot released and nothing spawned. The
+      // local exec budget re-checks here too: slots are what several turns
+      // wait on together, so the last free exec of the window is decided now.
       beforeSpawn: () => this.preflight(config, preflightContext),
+      // The exec exists: count it against the 5-hour budget and in the
+      // metrics now, whatever happens to it next — a timeout, an abort or a
+      // guard kill reached the plan just the same.
+      onSpawned: () => {
+        spawned.ticket = this.budget.recordExec();
+        this.metrics.recordExec(purpose, observationTurn?.observations ?? 0);
+        // What the M4 levers saved, booked only now that the call they rode on
+        // really spent its exec.
+        if (observationTurn && observationTurn.skippedFields > 0) {
+          this.metrics.recordFieldCompressionSkipped(observationTurn.skippedFields);
+        }
+        if (carriesInitTurn && this.deferredInitPending.delete(sessionDbId)) {
+          this.metrics.recordInitSkipped();
+        }
+      },
     };
 
     let result: TurnResult;
@@ -792,6 +1147,12 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
       throw error;
     }
 
+    if (result.usage) {
+      if (spawned.ticket) this.budget.recordUsage(spawned.ticket, result.usage);
+      this.metrics.recordUsage(result.usage);
+    }
+    if (result.toolAttempt) this.metrics.recordToolAttempt();
+
     try {
       const outcome = settleCodexTurn(result, turnContext, { violations: this.violations() });
       return { content: outcome.content, ...usageOf(result) };
@@ -799,6 +1160,22 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
       this.rememberFailure(session, error);
       throw error;
     }
+  }
+
+  /**
+   * What the observation call being made carries: the tool-use count and
+   * skipped-field count of the turn buildObservationTurn built last, when that
+   * turn is the one being sent (it is the last history entry); one tool use and
+   * nothing skipped otherwise. Consumed, so a stale turn can never be
+   * attributed to a later call.
+   */
+  private takeObservationTurn(history: ConversationMessage[]): { observations: number; skippedFields: number } {
+    const built = this.lastObservationTurn;
+    this.lastObservationTurn = null;
+    const last = history[history.length - 1];
+    return built && last && last.role === 'user' && last.content === built.prompt
+      ? { observations: built.observations, skippedFields: built.skippedFields }
+      : { observations: 1, skippedFields: 0 };
   }
 
   /**
@@ -811,6 +1188,20 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
     if (session && isClassified(error)) {
       session.lastProviderError = error;
     }
+  }
+}
+
+/**
+ * An Observation's tool field back to the value the optimizer would have
+ * seen: the base class encodes it with JSON.stringify, so JSON.parse restores
+ * it exactly. Anything that does not parse is used as-is.
+ */
+function decodeObservationField(encoded: unknown): unknown {
+  if (typeof encoded !== 'string') return encoded;
+  try {
+    return JSON.parse(encoded);
+  } catch {
+    return encoded;
   }
 }
 

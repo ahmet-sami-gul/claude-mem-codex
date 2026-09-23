@@ -14,7 +14,7 @@
  * never throw, fall back to stderr).
  */
 
-import { appendFileSync, statSync, renameSync, existsSync } from 'fs';
+import { appendFileSync, chmodSync, statSync, renameSync, existsSync } from 'fs';
 import { join } from 'path';
 import { DATA_DIR } from '../shared/paths.js';
 
@@ -22,6 +22,15 @@ const AUDIT_LOG_PATH = join(DATA_DIR, 'observer-audit.log');
 const ROTATE_AT_BYTES = 50 * 1024 * 1024; // 50MB
 const KEEP_GENERATIONS = 3;
 const MAX_INPUT_BYTES = 4096;
+/**
+ * The log records what an observer tried to run — commands, file paths, tool
+ * payloads lifted from the user's sessions — so it is owner-only, like the
+ * rest of claude-mem's private state (M4, plan 3.10).
+ */
+const AUDIT_LOG_MODE = 0o600;
+
+/** A log created by an earlier version (0644) is tightened once per process. */
+let modeVerified = false;
 
 export interface ObserverToolAttempt {
   source: 'Observer' | 'KnowledgeAgent';
@@ -95,7 +104,36 @@ function writeAuditEntry(attempt: ObserverToolAttempt): void {
     result: attempt.result,
     error_message: attempt.error_message ?? null,
   };
-  appendFileSync(AUDIT_LOG_PATH, JSON.stringify(entry) + '\n', 'utf8');
+  // `mode` only applies when this call creates the file (a fresh log, or the
+  // first write after a rotation); the umask can only remove bits from 0600.
+  appendFileSync(AUDIT_LOG_PATH, JSON.stringify(entry) + '\n', { encoding: 'utf8', mode: AUDIT_LOG_MODE });
+  tightenExistingLogMode();
+}
+
+/**
+ * An audit log that already existed before this version was created with the
+ * process umask (typically 0644). Bring it down to 0600 on the first write of
+ * each process; best-effort, and never on Windows, where POSIX modes do not
+ * apply.
+ */
+function tightenExistingLogMode(): void {
+  if (modeVerified) return;
+  modeVerified = true;
+  if (process.platform === 'win32') return;
+  try {
+    if ((statSync(AUDIT_LOG_PATH).mode & 0o077) !== 0) {
+      chmodSync(AUDIT_LOG_PATH, AUDIT_LOG_MODE);
+    }
+  } catch {
+    // [ANTI-PATTERN IGNORED]: best-effort hardening of a file we just wrote;
+    // this util is dependency-free by design (see header), and a failed chmod
+    // must never fail the audit write that already succeeded.
+  }
+}
+
+/** Test hook: re-run the one-time mode check on the next write. */
+export function resetObserverAuditModeCheckForTesting(): void {
+  modeVerified = false;
 }
 
 /**

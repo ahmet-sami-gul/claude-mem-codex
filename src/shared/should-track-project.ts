@@ -31,10 +31,22 @@ function isWithin(child: string, parent: string): boolean {
   return rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
+/**
+ * Whether `cwd` is claude-mem's own observer jail (OBSERVER_SESSIONS_DIR or
+ * anything under it) — where the memory observer itself runs (the Claude SDK
+ * observer and every `codex exec`). Nothing that happens there is the user's
+ * work, so it must never be captured as an observation: that would be the
+ * observer observing itself, and on Codex every such observation would cost
+ * another paid exec.
+ */
+export function isObserverSessionCwd(cwd: string): boolean {
+  return Boolean(cwd) && isWithin(cwd, OBSERVER_SESSIONS_DIR);
+}
+
 export function shouldTrackProject(cwd: string): boolean {
   if (process.env.CLAUDE_MEM_INTERNAL === '1') return false;
   if (!cwd) return true;
-  if (isWithin(cwd, OBSERVER_SESSIONS_DIR)) {
+  if (isObserverSessionCwd(cwd)) {
     return false;
   }
   if (isWithin(cwd, PLUGIN_CACHE_ROOT) || isWithin(cwd, PLUGIN_MARKETPLACE_PLUGIN_ROOT)) {

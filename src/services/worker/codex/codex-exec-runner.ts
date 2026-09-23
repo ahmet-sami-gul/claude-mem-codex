@@ -21,7 +21,9 @@
  *      reservation is released right after it returns. `null` means the
  *      registry could not start the process: setup_required
  *      codex_spawn_failed (errno is only logged by the registry, so it is not
- *      mapped).
+ *      mapped). The caller's `beforeSpawn` runs just before it (not awaited
+ *      when synchronous) and `onSpawned` just after a process exists, in the
+ *      same synchronous block — the local exec budget (M4) counts there.
  *   6. stdin: EPIPE is swallowed, the prompt is written, stdin is ended. codex
  *      exec blocks forever without EOF (Phase 0), so this is never skipped.
  *   7. stdout is parsed line by line (CodexJsonlParser, 8 MB cap); the last
@@ -155,6 +157,30 @@ export function createCodexAbortError(message = 'Codex exec aborted'): Error {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return typeof (value as PromiseLike<unknown> | null | undefined)?.then === 'function';
+}
+
+/**
+ * Tell the caller a process now exists (CodexTurnContext.onSpawned). The exec
+ * is already running and will be supervised whatever the callback does, so a
+ * throw is logged, never propagated — propagating it would abandon a live
+ * process group with no one reading its output.
+ */
+function notifySpawned(ctx: CodexTurnContext, pid: number): void {
+  if (!ctx.onSpawned) return;
+  try {
+    ctx.onSpawned();
+  } catch (error: unknown) {
+    logger.warn('SDK', 'Codex onSpawned callback threw; the exec continues', {
+      sessionId: ctx.sessionDbId,
+      purpose: ctx.purpose,
+      pid,
+      error: errorMessage(error),
+    });
+  }
 }
 
 function conditionError(condition: CodexRunnerCondition, detail?: string): ClassifiedProviderError {
@@ -443,8 +469,12 @@ export class ExecTransport implements CodexTransport {
         throw createCodexAbortError('Codex exec aborted before spawn');
       }
       // Inside the try on purpose: a refusal here still releases the slot.
+      // A synchronous check is deliberately not awaited, so the check, the
+      // spawn below and onSpawned run in one synchronous block and no other
+      // turn can spawn between this turn's check and its own count.
       if (ctx.beforeSpawn) {
-        await ctx.beforeSpawn();
+        const gate = ctx.beforeSpawn();
+        if (isPromiseLike(gate)) await gate;
         if (signal?.aborted) {
           throw createCodexAbortError('Codex exec aborted before spawn');
         }
@@ -477,6 +507,7 @@ export class ExecTransport implements CodexTransport {
     if (!handle) {
       throw conditionError('spawn_failed', 'the process registry could not start the Codex process');
     }
+    notifySpawned(ctx, handle.pid);
     return this.supervise(handle, prompt, ctx);
   }
 

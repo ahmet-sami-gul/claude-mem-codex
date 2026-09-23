@@ -465,6 +465,27 @@ describe('quota cooldown resume times (M3)', () => {
     expect(getQuotaCooldown('codex')?.probeInFlightSinceMs).toBeNull();
   });
 
+  it('tags the window with the refusal code, persists it, and never carries it across a re-arm that states none (M4)', () => {
+    const armedAt = Date.now();
+    const resumeAt = armedAt + 4 * HOUR;
+    expect(recordQuotaExhausted('codex', 'Local Codex exec budget reached', undefined, armedAt, resumeAt, 'local_budget').code)
+      .toBe('local_budget');
+
+    forgetQuotaCooldownsInMemoryForTesting();
+    expect(getQuotaCooldown('codex')?.code).toBe('local_budget');
+
+    // A later refusal with another (or no) cause names THAT cause; the resume
+    // time is still carried as before.
+    const reArmed = recordQuotaExhausted('codex', "You've hit your usage limit", undefined, armedAt + 1_000);
+    expect(reArmed.code).toBeUndefined();
+    expect(reArmed.resumeAtMs).toBe(resumeAt);
+    forgetQuotaCooldownsInMemoryForTesting();
+    expect(getQuotaCooldown('codex')?.code).toBeUndefined();
+
+    // The other providers' states are exactly what they were: no code at all.
+    expect('code' in recordQuotaExhausted('openrouter', 'Spend cap reached')).toBe(false);
+  });
+
   it('mirrors the stated resume time into observer-health as the real `until`', () => {
     const healthPath = join(paths.dataDir(), OBSERVER_HEALTH_FILENAME);
     const armedAt = Date.now();

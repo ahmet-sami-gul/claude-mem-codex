@@ -21,6 +21,28 @@ export interface SDKSession {
   last_assistant_message?: string;
 }
 
+/** Both forms of the observation envelope tag, any case (see escapeObservedEnvelopeTags). */
+const OBSERVED_ENVELOPE_TAG_RE = /<(\/?)(observed_from_primary_session)/gi;
+
+/**
+ * Neutralise `<observed_from_primary_session` and
+ * `</observed_from_primary_session` inside text that came from the primary
+ * session, by turning the leading `<` into `&lt;` (the same spelling the Codex
+ * renderer uses for its own framing tags).
+ *
+ * The envelope is the boundary between untrusted data (a tool payload, the
+ * user's request, context rebuilt from stored observations) and the observer's
+ * instructions. Without this, a payload containing a closing tag ended the
+ * envelope early and whatever followed it read as trusted text; with it, the
+ * only envelope tags in a prompt are the ones this module writes.
+ *
+ * Case-insensitive on purpose: a model does not read tags case-sensitively.
+ * Text without either sequence is returned unchanged, byte for byte.
+ */
+export function escapeObservedEnvelopeTags(text: string): string {
+  return text.replace(OBSERVED_ENVELOPE_TAG_RE, '&lt;$1$2');
+}
+
 function observationSkeleton(mode: ModeConfig): string {
   return `${mode.prompts.output_format_header}
 
@@ -72,7 +94,7 @@ export function buildInitPrompt(
 ${wrapPriorContext(priorContext)}
 
 <observed_from_primary_session>
-  <user_request>${userPrompt}</user_request>
+  <user_request>${escapeObservedEnvelopeTags(`${userPrompt}`)}</user_request>
   <requested_at>${new Date().toISOString().split('T')[0]}</requested_at>
 </observed_from_primary_session>
 
@@ -100,6 +122,12 @@ ${mode.prompts.header_memory_start}`;
  * rendering of the same rows.
  *
  * Returns '' when there is nothing yet, so a first generation is unchanged.
+ *
+ * The context is rebuilt from stored observations, i.e. from text a model
+ * wrote about primary-session content, so envelope tags inside it are escaped
+ * like any other primary-session text (escapeObservedEnvelopeTags): it sits
+ * right before the init/continuation envelope and must not be able to open or
+ * close it.
  */
 export function wrapPriorContext(priorContext: string): string {
   const trimmed = priorContext.trim();
@@ -109,7 +137,7 @@ export function wrapPriorContext(priorContext: string): string {
 
   return `
 <session_start_context>
-${trimmed}
+${escapeObservedEnvelopeTags(trimmed)}
 </session_start_context>
 
 The context above is what you have already recorded for this work. Continue from
@@ -226,40 +254,104 @@ function truncateObservationField(value: unknown, maxChars: number = OBS_PROMPT_
   return `${head}\n... <elided chars="${elidedChars}" original_size_chars="${raw.length}" reason="oversize" /> ...\n${tail}`;
 }
 
-export function buildObservationPrompt(obs: Observation): string {
-  let toolInput: any;
-  let toolOutput: any;
-
+/**
+ * Parse a tool field the way the observer prompt always has: a JSON string is
+ * decoded (so it can be re-rendered, image-stripped and truncated), anything
+ * else is used as-is.
+ */
+function decodeToolField(value: string, toolName: string, label: 'input' | 'output'): any {
   try {
-    toolInput = typeof obs.tool_input === 'string' ? JSON.parse(obs.tool_input) : obs.tool_input;
+    return typeof value === 'string' ? JSON.parse(value) : value;
   } catch (error: unknown) {
-    logger.debug('SDK', 'Tool input is plain string, using as-is', {
-      toolName: obs.tool_name
+    logger.debug('SDK', `Tool ${label} is plain string, using as-is`, {
+      toolName
     }, error instanceof Error ? error : new Error(String(error)));
-    toolInput = obs.tool_input;
+    return value;
   }
+}
 
-  try {
-    toolOutput = typeof obs.tool_output === 'string' ? JSON.parse(obs.tool_output) : obs.tool_output;
-  } catch (error: unknown) {
-    logger.debug('SDK', 'Tool output is plain string, using as-is', {
-      toolName: obs.tool_name
-    }, error instanceof Error ? error : new Error(String(error)));
-    toolOutput = obs.tool_output;
-  }
+/**
+ * The `<observed_from_primary_session>` block for one tool use — the part of
+ * the observation prompt that carries untrusted data — WITHOUT the reply rules
+ * that follow it.
+ *
+ * Every field that can hold primary-session content (tool name, working
+ * directory, parameters, outcome) goes through escapeObservedEnvelopeTags, so
+ * a tool payload can neither close this envelope early nor open a second one.
+ * The timestamp is generated here and needs no escaping.
+ *
+ * Exported so a turn carrying several tool uses (buildObservationBatchPrompt)
+ * renders each one exactly the way a single-observation prompt does.
+ */
+export function renderObservationEnvelope(obs: Observation): string {
+  const toolInput = decodeToolField(obs.tool_input, obs.tool_name, 'input');
+  const toolOutput = decodeToolField(obs.tool_output, obs.tool_name, 'output');
 
   return `<observed_from_primary_session>
-  <what_happened>${obs.tool_name}</what_happened>
-  <occurred_at>${new Date(obs.created_at_epoch).toISOString()}</occurred_at>${obs.cwd ? `\n  <working_directory>${obs.cwd}</working_directory>` : ''}
-  <parameters>${truncateObservationField(stripImagePayloads(toolInput))}</parameters>
-  <outcome>${truncateObservationField(stripImagePayloads(toolOutput))}</outcome>
-</observed_from_primary_session>
+  <what_happened>${escapeObservedEnvelopeTags(`${obs.tool_name}`)}</what_happened>
+  <occurred_at>${new Date(obs.created_at_epoch).toISOString()}</occurred_at>${obs.cwd ? `\n  <working_directory>${escapeObservedEnvelopeTags(`${obs.cwd}`)}</working_directory>` : ''}
+  <parameters>${escapeObservedEnvelopeTags(truncateObservationField(stripImagePayloads(toolInput)))}</parameters>
+  <outcome>${escapeObservedEnvelopeTags(truncateObservationField(stripImagePayloads(toolOutput)))}</outcome>
+</observed_from_primary_session>`;
+}
 
-If a <parameters> or <outcome> block above contains an "<elided chars=... />" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.
+/** The truncation caveat every observation turn carries, single or batched. */
+const ELIDED_FIELD_RULE = 'If a <parameters> or <outcome> block above contains an "<elided chars=... />" marker, that field was truncated to fit the observer\'s context window. Describe only what you can see in the kept portion and do not infer details about the elided range.';
+
+/** The two closing reply rules shared by single and batched observation turns. */
+const DURABLE_FINDINGS_AND_XML_ONLY_RULES = `Concrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.
+Never reply with prose such as "Skipping", "No substantive tool executions", or any explanation outside XML. Non-XML text is discarded.`;
+
+/**
+ * The reply rules that follow a single observation envelope. The trusted
+ * part of the observation prompt: it sits AFTER the envelope's closing tag.
+ */
+export const OBSERVATION_REPLY_RULES = `${ELIDED_FIELD_RULE}
 
 Return either one or more <observation>...</observation> blocks, or <skip_summary reason="noise" /> if this tool use should be skipped.
-Concrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.
-Never reply with prose such as "Skipping", "No substantive tool executions", or any explanation outside XML. Non-XML text is discarded.`;
+${DURABLE_FINDINGS_AND_XML_ONLY_RULES}`;
+
+/**
+ * The reply rules that follow the envelopes of a batched turn: the same
+ * rules, with the one line that says what to answer rewritten for several
+ * tool uses. Deliberately does not name the envelope tag itself, so the only
+ * `observed_from_primary_session` tags in a batched turn are the envelopes'.
+ */
+export function observationBatchReplyRules(count: number): string {
+  return `${ELIDED_FIELD_RULE}
+
+The ${count} tool uses above are consecutive, oldest first. Return either one or more <observation>...</observation> blocks covering all of them (one observation may cover several related tool uses; record each durable finding once), or <skip_summary reason="noise" /> if none of them should be recorded.
+${DURABLE_FINDINGS_AND_XML_ONLY_RULES}`;
+}
+
+export function buildObservationPrompt(obs: Observation): string {
+  return `${renderObservationEnvelope(obs)}
+
+${OBSERVATION_REPLY_RULES}`;
+}
+
+/**
+ * One observer turn for several consecutive tool uses (M4 batching).
+ *
+ * Layout: the envelopes back to back, separated only by a newline, then the
+ * batch reply rules. The whitespace-only gap between one envelope's closing
+ * tag and the next one's opening tag is what the Codex renderer recognises as
+ * a genuine envelope boundary (codex-prompt.ts, escapeCodexContent), so
+ * nothing trusted ever sits between two envelopes.
+ *
+ * A batch of one is exactly buildObservationPrompt, byte for byte: turning
+ * batching down to a single observation changes nothing on the wire.
+ */
+export function buildObservationBatchPrompt(observations: readonly Observation[]): string {
+  if (observations.length === 0) {
+    throw new Error('buildObservationBatchPrompt needs at least one observation');
+  }
+  if (observations.length === 1) {
+    return buildObservationPrompt(observations[0]);
+  }
+  return `${observations.map(renderObservationEnvelope).join('\n')}
+
+${observationBatchReplyRules(observations.length)}`;
 }
 
 export function buildSummaryPrompt(session: SDKSession, mode: ModeConfig): string {
@@ -307,7 +399,7 @@ export function buildContinuationPrompt(
 ${wrapPriorContext(priorContext)}
 
 <observed_from_primary_session>
-  <user_request>${userPrompt}</user_request>
+  <user_request>${escapeObservedEnvelopeTags(`${userPrompt}`)}</user_request>
   <requested_at>${new Date().toISOString().split('T')[0]}</requested_at>
 </observed_from_primary_session>
 

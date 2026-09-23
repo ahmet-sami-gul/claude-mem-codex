@@ -173,6 +173,23 @@ function compactEditOutput(fields: { toolInput: unknown; toolOutput: unknown }, 
   }
 }
 
+/**
+ * How many compression calls `optimizeObservationFields` would make for these
+ * fields (0, 1 or 2), decided exactly the way it decides — same size test,
+ * same Edit compaction first — without calling anything. For a provider that
+ * skips the pass (a null fieldCompressor), this is the number of model calls
+ * the skip saved; the Codex metrics count it (M4).
+ */
+export function countFieldsNeedingCompression(
+  fields: { toolInput: unknown; toolOutput: unknown },
+  context: { toolName?: string },
+  maxChars: number = OBS_PROMPT_FIELD_MAX_CHARS,
+): number {
+  const oversized = (value: unknown): boolean => (JSON.stringify(value, null, 2) ?? '').length > maxChars;
+  const output = context.toolName === 'Edit' ? compactEditOutput(fields, maxChars) : fields.toolOutput;
+  return (oversized(fields.toolInput) ? 1 : 0) + (oversized(output) ? 1 : 0);
+}
+
 export async function optimizeObservationFields(
   fields: { toolInput: unknown; toolOutput: unknown },
   compress: FieldCompressor,

@@ -6,8 +6,68 @@ import { getSdkProcessForSession, ensureSdkProcessExit } from '../../supervisor/
 import { getSupervisor } from '../../supervisor/index.js';
 import { telemetryBuffer } from '../telemetry/buffer.js';
 import { deliverSessionWrapup, type TelegramWrapupFormatter } from '../integrations/TelegramWrapupNotifier.js';
+import { renderObservationEnvelope } from '../../sdk/prompts.js';
 
 export const SESSION_END_WRAPUP_GRACE_MS = 5_000;
+
+/**
+ * How a provider that opts into observation batching (M4) wants its turns
+ * sized. See OpenAICompatibleProvider.observationBatchPolicy.
+ */
+export interface ObservationBatchPolicy {
+  /** Most observations one turn may carry, the first one included. 1 disables batching. */
+  maxMessages: number;
+  /**
+   * Character budget for the batch, measured as the rendered observation
+   * envelopes (observationBatchChars). The first observation always goes,
+   * whatever its size; later ones join only while the total stays within it.
+   */
+  maxChars: number;
+  /**
+   * How long to wait for more work when nothing else is queued, so a burst of
+   * tool calls a moment apart shares one turn. 0 never waits. Never applied
+   * when work is already queued: a backlog is claimed at once.
+   */
+  lingerMs: number;
+}
+
+/**
+ * The size an observation adds to a batched turn: its rendered
+ * `<observed_from_primary_session>` envelope, i.e. after the prompt's own
+ * image stripping and per-field truncation — the characters the provider will
+ * actually be sent, not the raw payload. The timestamp is a fixed-width ISO
+ * string, so any value measures the same.
+ */
+export function observationBatchChars(message: PendingMessage): number {
+  return renderObservationEnvelope({
+    id: 0,
+    tool_name: message.tool_name ?? '',
+    tool_input: JSON.stringify(message.tool_input),
+    tool_output: JSON.stringify(message.tool_response),
+    created_at_epoch: 0,
+    cwd: message.cwd,
+  }).length;
+}
+
+/** Empty and absent mean the same thing for every grouping field. */
+function groupKey(value: string | undefined | null): string | null {
+  return value ? value : null;
+}
+
+/**
+ * Whether `candidate` may share a turn with `first`: another observation from
+ * the same prompt, the same (sub)agent and the same working directory. The
+ * turn's reply is stored under ONE response context (prompt number, agent id
+ * and type — ResponseProcessor.snapshotResponseContext) and one project root,
+ * so mixing any of these would file some observations under the wrong one.
+ */
+function sameObservationGroup(first: PendingMessage, candidate: PendingMessage): boolean {
+  return candidate.type === 'observation'
+    && candidate.prompt_number === first.prompt_number
+    && groupKey(candidate.agentId) === groupKey(first.agentId)
+    && groupKey(candidate.agentType) === groupKey(first.agentType)
+    && groupKey(candidate.cwd) === groupKey(first.cwd);
+}
 
 export class SessionManager {
   private dbManager: DatabaseManager;
@@ -321,6 +381,99 @@ export class SessionManager {
       session.earliestPendingTimestamp = null;
     }
     return confirmed;
+  }
+
+  /**
+   * Grow the observation the drain just yielded (`first`, already claimed by
+   * getMessageIterator) into a batch for one provider turn (M4, opt-in —
+   * only providers with an observationBatchPolicy call this; the Claude path
+   * and the default OpenAI-compatible path never do).
+   *
+   * - Lingers only when nothing else was queued when the call began and the
+   *   session is not aborted: a backlog is claimed at once and the batch
+   *   returns as soon as it runs dry, while an idle queue gets up to
+   *   `lingerMs` (in total, not per message) for the rest of a burst to
+   *   arrive.
+   * - Claims with buffer.claimContiguous: FIFO, stopping at the first message
+   *   that is not an observation of the same prompt, agent and cwd, or that
+   *   would take the batch past `maxChars` — so a summarize request is never
+   *   skipped over.
+   * - Records every claimed id in `session.claimedMessageIds`, exactly like
+   *   the drain does for `first`, so confirmClaimedMessages and
+   *   resetProcessingToPending act on the whole batch together, and keeps
+   *   `earliestPendingTimestamp` / `lastGeneratorActivity` current.
+   *
+   * Returns the batch in queue order, `first` included.
+   */
+  async claimObservationBatch(
+    sessionDbId: number,
+    first: PendingMessageWithId,
+    policy: ObservationBatchPolicy,
+  ): Promise<PendingMessageWithId[]> {
+    const batch: PendingMessageWithId[] = [first];
+    const session = this.sessions.get(sessionDbId);
+    const maxMessages = Math.floor(policy.maxMessages);
+    if (!session || first.type !== 'observation' || !(maxMessages > 1)) {
+      return batch;
+    }
+
+    const signal = session.abortController.signal;
+    let chars = observationBatchChars(first);
+    if (!(chars < policy.maxChars)) {
+      return batch;
+    }
+    // Decided ONCE, before anything else is claimed: a call that finds work
+    // already queued is draining a backlog and returns as soon as that runs
+    // dry; only a call that found the queue idle waits for the rest of a burst.
+    // Re-deciding per pass would claim a short backlog and then sit out the
+    // whole linger on the now-empty queue, delaying every backlog batch.
+    const mayLinger = this.buffer.getUnclaimedCount(sessionDbId) === 0;
+    const lingerUntil = Date.now() + Math.max(0, policy.lingerMs);
+    const inBatch = new Set<number>([first._persistentId]);
+    const accept = (candidate: PendingMessageWithId): boolean => {
+      // A message already in this batch can only be offered again if its
+      // claim was reset underneath us; sending it twice would store it twice.
+      if (inBatch.has(candidate._persistentId)) return false;
+      if (!sameObservationGroup(first, candidate)) return false;
+      const size = observationBatchChars(candidate);
+      if (chars + size > policy.maxChars) return false;
+      chars += size;
+      return true;
+    };
+
+    while (batch.length < maxMessages && !signal.aborted) {
+      if (this.buffer.getUnclaimedCount(sessionDbId) === 0) {
+        if (!mayLinger) break;
+        const remainingMs = lingerUntil - Date.now();
+        if (remainingMs <= 0) break;
+        const arrived = await this.buffer.waitForNewMessage(sessionDbId, signal, remainingMs);
+        if (!arrived || signal.aborted) break;
+        continue;
+      }
+
+      const claimed = this.buffer.claimContiguous(sessionDbId, accept, maxMessages - batch.length);
+      if (claimed.length === 0) {
+        // The oldest waiting message cannot join (a summarize, another
+        // prompt/agent/cwd, or over budget). FIFO: the batch ends here.
+        break;
+      }
+      for (const message of claimed) {
+        inBatch.add(message._persistentId);
+        session.claimedMessageIds.push(message._persistentId);
+        session.earliestPendingTimestamp = session.earliestPendingTimestamp === null
+          ? message._originalTimestamp
+          : Math.min(session.earliestPendingTimestamp, message._originalTimestamp);
+        batch.push(message);
+      }
+      session.lastGeneratorActivity = Date.now();
+    }
+
+    if (batch.length > 1) {
+      logger.debug('QUEUE', `BATCH_CLAIMED | sessionDbId=${sessionDbId} | size=${batch.length} | chars=${chars} | ids=[${batch.map(message => message._persistentId).join(',')}]`, {
+        sessionId: sessionDbId
+      });
+    }
+    return batch;
   }
 
   getClaimedMessages(sessionDbId: number): PendingMessageWithId[] {

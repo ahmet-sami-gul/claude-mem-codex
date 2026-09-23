@@ -33,6 +33,14 @@ export interface ManagedProcessInfo {
    * — an 'aux' process is still a type 'sdk' record and still occupies a slot.
    */
   role?: 'aux';
+  /**
+   * The executable spawnSdkProcess started (its `command`, before any Windows
+   * `.cmd` wrapping). Recorded so a successor worker can POSITIVELY identify a
+   * leftover it may reap — the boot-time Codex orphan cleanup only ever
+   * signals a record whose command is the resolved codex binary. Absent on
+   * records written before it existed, which are therefore never matched.
+   */
+  command?: string;
 }
 
 export interface ManagedProcessRecord extends ManagedProcessInfo {
@@ -789,6 +797,7 @@ export function spawnSdkProcess(
     startedAt: new Date().toISOString(),
     pgid,
     ...(options.role ? { role: options.role } : {}),
+    command: options.command,
   }, child);
 
   child.on('exit', () => {

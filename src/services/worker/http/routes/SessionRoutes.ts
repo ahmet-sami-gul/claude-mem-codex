@@ -475,6 +475,16 @@ export class SessionRoutes extends BaseRouteHandler {
     // Claim the probe rather than merely reading the clock: every live session
     // sees the window elapse at the same instant, so a bare check would let
     // them all through together.
+    //
+    // A codex hold armed by the LOCAL exec budget (M4) is re-evaluated first:
+    // its resume time was computed from the limit in force when it armed, so a
+    // raised or removed CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H (or a reset usage
+    // file) would otherwise keep the observer paused for up to five hours —
+    // across restarts too, since the breaker is persisted. Lifting it clears
+    // the breaker, which also drains every other waiting session.
+    if (selectedProvider === 'codex') {
+      this.codexAgent?.releaseStaleLocalBudgetHold?.();
+    }
     const admission = tryAdmitQuotaProbe(selectedProvider);
     if (!admission.admitted) {
       // This run is not starting, so it must not hold the gateway re-probe,
@@ -900,7 +910,10 @@ export class SessionRoutes extends BaseRouteHandler {
       : null;
     const message = stated?.message ?? GENERIC_QUOTA_MESSAGE;
     const resumeAtMs = stated?.retryAfterMs !== undefined ? Date.now() + stated.retryAfterMs : undefined;
-    recordQuotaExhausted(provider, message, window, undefined, resumeAtMs);
+    // The refusal's code rides along (codex only, since `stated` is), so a
+    // hold armed by the LOCAL exec budget can be lifted as soon as that budget
+    // allows execs again, instead of at a resume time the old limit implied.
+    recordQuotaExhausted(provider, message, window, undefined, resumeAtMs, stated?.code);
     // Quota returned as assistant prose never throws, so it never reaches
     // the .catch above and never armed the health ledger. Without this the
     // session-start warning is structurally blind to an entire outage

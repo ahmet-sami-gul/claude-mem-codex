@@ -440,6 +440,10 @@ describe('supervisor ProcessRegistry', () => {
       });
 
       expect(result).not.toBeNull();
+      // The executable is recorded, so a successor worker can positively
+      // identify a leftover before it signals anything (codex orphan cleanup).
+      const record = getProcessRegistry().getAll().find(entry => entry.id === `sdk:${TEST_SESSION_ID}:${result!.pid}`);
+      expect(record?.command).toBe(process.execPath);
       try {
         const output = await new Response(result!.process.stdout).text();
         expect(output.trim()).toBe(realpathSync(EXPECTED_SDK_CWD));

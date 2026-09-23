@@ -1,0 +1,361 @@
+{
+  "generatedFrom": "86919004 (pre-M4 prompts.ts and OpenAICompatibleProvider.ts)",
+  "builders": {
+    "init_no_context": "«system_identity»\n\n\n<observed_from_primary_session>\n  <user_request>Refactor the parser</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»",
+    "init_with_context": "«system_identity»\n\n<session_start_context>\n# Earlier in this session\n- Read src/parser.ts\n- Ran the parser tests (3 pass)\n</session_start_context>\n\nThe context above is what you have already recorded for this work. Continue from\nthere: do not re-record it, and do not treat its absence from the conversation\nabove as meaning the work did not happen.\n\n<observed_from_primary_session>\n  <user_request>Refactor the parser</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»",
+    "init_markup_request": "«system_identity»\n\n\n<observed_from_primary_session>\n  <user_request>Fix <observation> parsing & the </turn> edge case</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»",
+    "continuation_no_context": "«continuation_greeting»\n\n\n<observed_from_primary_session>\n  <user_request>Now add tests</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«system_identity»\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«continuation_instruction»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_continued»",
+    "continuation_with_context": "«continuation_greeting»\n\n<session_start_context>\n# Earlier in this session\n- Read src/parser.ts\n- Ran the parser tests (3 pass)\n</session_start_context>\n\nThe context above is what you have already recorded for this work. Continue from\nthere: do not re-record it, and do not treat its absence from the conversation\nabove as meaning the work did not happen.\n\n<observed_from_primary_session>\n  <user_request>Now add tests</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«system_identity»\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«continuation_instruction»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_continued»",
+    "observation_basic": "<observed_from_primary_session>\n  <what_happened>Read</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"file_path\": \"src/parser.ts\"\n}</parameters>\n  <outcome>{\n  \"content\": \"export function parse() {}\"\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded.",
+    "observation_no_cwd": "<observed_from_primary_session>\n  <what_happened>Read</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <parameters>{\n  \"file_path\": \"src/parser.ts\"\n}</parameters>\n  <outcome>{\n  \"content\": \"export function parse() {}\"\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded.",
+    "observation_plain_string_fields": "<observed_from_primary_session>\n  <what_happened>Bash</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>\"not json {\"</parameters>\n  <outcome>\"plain output\\nline 2\"</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded.",
+    "observation_oversized_field": "<observed_from_primary_session>\n  <what_happened>Read</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"file_path\": \"src/parser.ts\"\n}</parameters>\n  <outcome>{\n  \"content\": \"HEAD_SENTINELAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n... <elided chars=\"45645\" original_size_chars=\"60045\" reason=\"oversize\" /> ...\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATAIL_SENTINEL\"\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded.",
+    "observation_image_payload": "<observed_from_primary_session>\n  <what_happened>mcp__browser__screenshot</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"action\": \"screenshot\"\n}</parameters>\n  <outcome>{\n  \"content\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"Captured the viewport.\"\n    },\n    {\n      \"type\": \"image\",\n      \"source\": {\n        \"elided\": \"image data withheld from the observer\",\n        \"media_type\": \"image/png\",\n        \"bytes\": 20022\n      }\n    }\n  ]\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded.",
+    "observation_markup_and_unicode": "<observed_from_primary_session>\n  <what_happened>Edit</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"file_path\": \"src/ü.ts\",\n  \"old\": \"<observation>\",\n  \"new\": \"</turn> &lt; <current_task>\"\n}</parameters>\n  <outcome>{\n  \"ok\": true,\n  \"note\": \"Türkçe karakterler 😀\"\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded.",
+    "summary": "--- MODE SWITCH: PROGRESS SUMMARY ---\n⚠️ CRITICAL TAG REQUIREMENT — READ CAREFULLY:\n• You MUST wrap your ENTIRE response in <summary>...</summary> tags.\n• Do NOT use <observation> tags. <observation> output will be DISCARDED and cause a system error.\n• The ONLY accepted root tag is <summary>. Any other root tag is a protocol violation.\n\n«header_summary_checkpoint»\n«summary_instruction»\n\n«summary_context_label»\nParser refactored and tests pass.\n\n«summary_format_instruction»\n<summary>\n  <request>«xml_summary_request_placeholder»</request>\n  <investigated>«xml_summary_investigated_placeholder»</investigated>\n  <learned>«xml_summary_learned_placeholder»</learned>\n  <completed>«xml_summary_completed_placeholder»</completed>\n  <next_steps>«xml_summary_next_steps_placeholder»</next_steps>\n  <notes>«xml_summary_notes_placeholder»</notes>\n</summary>\n\nREMINDER: Your response MUST use <summary> as the root tag, NOT <observation>.\n«summary_footer»"
+  },
+  "providers": {
+    "openrouter": {
+      "queryArgCounts": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "requests": [
+        {
+          "url": "https://gateway.test/v1/chat/completions",
+          "body": {
+            "model": "snap/model",
+            "messages": [
+              {
+                "role": "user",
+                "content": "«system_identity»\n\n<session_start_context>\n# Earlier in this session\n- Read src/parser.ts\n- Ran the parser tests (3 pass)\n</session_start_context>\n\nThe context above is what you have already recorded for this work. Continue from\nthere: do not re-record it, and do not treat its absence from the conversation\nabove as meaning the work did not happen.\n\n<observed_from_primary_session>\n  <user_request>Refactor the parser</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»"
+              }
+            ],
+            "temperature": 0.3,
+            "max_tokens": 4096
+          }
+        },
+        {
+          "url": "https://gateway.test/v1/chat/completions",
+          "body": {
+            "model": "snap/model",
+            "messages": [
+              {
+                "role": "user",
+                "content": "«system_identity»\n\n<session_start_context>\n# Earlier in this session\n- Read src/parser.ts\n- Ran the parser tests (3 pass)\n</session_start_context>\n\nThe context above is what you have already recorded for this work. Continue from\nthere: do not re-record it, and do not treat its absence from the conversation\nabove as meaning the work did not happen.\n\n<observed_from_primary_session>\n  <user_request>Refactor the parser</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»"
+              },
+              {
+                "role": "assistant",
+                "content": "Ready to observe."
+              },
+              {
+                "role": "user",
+                "content": "<observed_from_primary_session>\n  <what_happened>Read</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"file_path\": \"src/parser.ts\"\n}</parameters>\n  <outcome>{\n  \"content\": \"export function parse() {}\"\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded."
+              }
+            ],
+            "temperature": 0.3,
+            "max_tokens": 4096
+          }
+        },
+        {
+          "url": "https://gateway.test/v1/chat/completions",
+          "body": {
+            "model": "snap/model",
+            "messages": [
+              {
+                "role": "user",
+                "content": "«system_identity»\n\n<session_start_context>\n# Earlier in this session\n- Read src/parser.ts\n- Ran the parser tests (3 pass)\n</session_start_context>\n\nThe context above is what you have already recorded for this work. Continue from\nthere: do not re-record it, and do not treat its absence from the conversation\nabove as meaning the work did not happen.\n\n<observed_from_primary_session>\n  <user_request>Refactor the parser</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»"
+              },
+              {
+                "role": "assistant",
+                "content": "Ready to observe."
+              },
+              {
+                "role": "user",
+                "content": "<observed_from_primary_session>\n  <what_happened>Read</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"file_path\": \"src/parser.ts\"\n}</parameters>\n  <outcome>{\n  \"content\": \"export function parse() {}\"\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded."
+              },
+              {
+                "role": "assistant",
+                "content": "<observation>\n  <type>discovery</type>\n  <title>Parser entry point</title>\n  <subtitle>parse() lives in src/parser.ts</subtitle>\n  <facts><fact>parse is exported</fact></facts>\n  <narrative>The parser exposes a single parse() function.</narrative>\n  <concepts><concept>how-it-works</concept></concepts>\n  <files_read></files_read>\n  <files_modified></files_modified>\n</observation>"
+              },
+              {
+                "role": "user",
+                "content": "<observed_from_primary_session>\n  <what_happened>Bash</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"command\": \"bun test tests/parser.test.ts\"\n}</parameters>\n  <outcome>{\n  \"stdout\": \"3 pass\\n0 fail\",\n  \"exitCode\": 0\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded."
+              }
+            ],
+            "temperature": 0.3,
+            "max_tokens": 4096
+          }
+        },
+        {
+          "url": "https://gateway.test/v1/chat/completions",
+          "body": {
+            "model": "snap/model",
+            "messages": [
+              {
+                "role": "user",
+                "content": "«system_identity»\n\n<session_start_context>\n# Earlier in this session\n- Read src/parser.ts\n- Ran the parser tests (3 pass)\n</session_start_context>\n\nThe context above is what you have already recorded for this work. Continue from\nthere: do not re-record it, and do not treat its absence from the conversation\nabove as meaning the work did not happen.\n\n<observed_from_primary_session>\n  <user_request>Refactor the parser</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»"
+              },
+              {
+                "role": "assistant",
+                "content": "Ready to observe."
+              },
+              {
+                "role": "user",
+                "content": "<observed_from_primary_session>\n  <what_happened>Read</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"file_path\": \"src/parser.ts\"\n}</parameters>\n  <outcome>{\n  \"content\": \"export function parse() {}\"\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded."
+              },
+              {
+                "role": "assistant",
+                "content": "<observation>\n  <type>discovery</type>\n  <title>Parser entry point</title>\n  <subtitle>parse() lives in src/parser.ts</subtitle>\n  <facts><fact>parse is exported</fact></facts>\n  <narrative>The parser exposes a single parse() function.</narrative>\n  <concepts><concept>how-it-works</concept></concepts>\n  <files_read></files_read>\n  <files_modified></files_modified>\n</observation>"
+              },
+              {
+                "role": "user",
+                "content": "<observed_from_primary_session>\n  <what_happened>Bash</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"command\": \"bun test tests/parser.test.ts\"\n}</parameters>\n  <outcome>{\n  \"stdout\": \"3 pass\\n0 fail\",\n  \"exitCode\": 0\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded."
+              },
+              {
+                "role": "assistant",
+                "content": "<observation>\n  <type>discovery</type>\n  <title>Parser entry point</title>\n  <subtitle>parse() lives in src/parser.ts</subtitle>\n  <facts><fact>parse is exported</fact></facts>\n  <narrative>The parser exposes a single parse() function.</narrative>\n  <concepts><concept>how-it-works</concept></concepts>\n  <files_read></files_read>\n  <files_modified></files_modified>\n</observation>"
+              },
+              {
+                "role": "user",
+                "content": "--- MODE SWITCH: PROGRESS SUMMARY ---\n⚠️ CRITICAL TAG REQUIREMENT — READ CAREFULLY:\n• You MUST wrap your ENTIRE response in <summary>...</summary> tags.\n• Do NOT use <observation> tags. <observation> output will be DISCARDED and cause a system error.\n• The ONLY accepted root tag is <summary>. Any other root tag is a protocol violation.\n\n«header_summary_checkpoint»\n«summary_instruction»\n\n«summary_context_label»\nParser refactored and tests pass.\n\n«summary_format_instruction»\n<summary>\n  <request>«xml_summary_request_placeholder»</request>\n  <investigated>«xml_summary_investigated_placeholder»</investigated>\n  <learned>«xml_summary_learned_placeholder»</learned>\n  <completed>«xml_summary_completed_placeholder»</completed>\n  <next_steps>«xml_summary_next_steps_placeholder»</next_steps>\n  <notes>«xml_summary_notes_placeholder»</notes>\n</summary>\n\nREMINDER: Your response MUST use <summary> as the root tag, NOT <observation>.\n«summary_footer»"
+              }
+            ],
+            "temperature": 0.3,
+            "max_tokens": 4096
+          }
+        }
+      ],
+      "confirmedIdSets": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ]
+      ],
+      "resetCalls": 1,
+      "storeCalls": 3,
+      "historyRoles": [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant"
+      ]
+    },
+    "gemini": {
+      "queryArgCounts": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "requests": [
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=snap-key",
+          "body": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "«system_identity»\n\n<session_start_context>\n# Earlier in this session\n- Read src/parser.ts\n- Ran the parser tests (3 pass)\n</session_start_context>\n\nThe context above is what you have already recorded for this work. Continue from\nthere: do not re-record it, and do not treat its absence from the conversation\nabove as meaning the work did not happen.\n\n<observed_from_primary_session>\n  <user_request>Refactor the parser</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»"
+                  }
+                ]
+              }
+            ],
+            "generationConfig": {
+              "temperature": 0.3,
+              "maxOutputTokens": 4096
+            }
+          }
+        },
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=snap-key",
+          "body": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "«system_identity»\n\n<session_start_context>\n# Earlier in this session\n- Read src/parser.ts\n- Ran the parser tests (3 pass)\n</session_start_context>\n\nThe context above is what you have already recorded for this work. Continue from\nthere: do not re-record it, and do not treat its absence from the conversation\nabove as meaning the work did not happen.\n\n<observed_from_primary_session>\n  <user_request>Refactor the parser</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»"
+                  }
+                ]
+              },
+              {
+                "role": "model",
+                "parts": [
+                  {
+                    "text": "Ready to observe."
+                  }
+                ]
+              },
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "<observed_from_primary_session>\n  <what_happened>Read</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"file_path\": \"src/parser.ts\"\n}</parameters>\n  <outcome>{\n  \"content\": \"export function parse() {}\"\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded."
+                  }
+                ]
+              }
+            ],
+            "generationConfig": {
+              "temperature": 0.3,
+              "maxOutputTokens": 4096
+            }
+          }
+        },
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=snap-key",
+          "body": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "«system_identity»\n\n<session_start_context>\n# Earlier in this session\n- Read src/parser.ts\n- Ran the parser tests (3 pass)\n</session_start_context>\n\nThe context above is what you have already recorded for this work. Continue from\nthere: do not re-record it, and do not treat its absence from the conversation\nabove as meaning the work did not happen.\n\n<observed_from_primary_session>\n  <user_request>Refactor the parser</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»"
+                  }
+                ]
+              },
+              {
+                "role": "model",
+                "parts": [
+                  {
+                    "text": "Ready to observe."
+                  }
+                ]
+              },
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "<observed_from_primary_session>\n  <what_happened>Read</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"file_path\": \"src/parser.ts\"\n}</parameters>\n  <outcome>{\n  \"content\": \"export function parse() {}\"\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded."
+                  }
+                ]
+              },
+              {
+                "role": "model",
+                "parts": [
+                  {
+                    "text": "<observation>\n  <type>discovery</type>\n  <title>Parser entry point</title>\n  <subtitle>parse() lives in src/parser.ts</subtitle>\n  <facts><fact>parse is exported</fact></facts>\n  <narrative>The parser exposes a single parse() function.</narrative>\n  <concepts><concept>how-it-works</concept></concepts>\n  <files_read></files_read>\n  <files_modified></files_modified>\n</observation>"
+                  }
+                ]
+              },
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "<observed_from_primary_session>\n  <what_happened>Bash</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"command\": \"bun test tests/parser.test.ts\"\n}</parameters>\n  <outcome>{\n  \"stdout\": \"3 pass\\n0 fail\",\n  \"exitCode\": 0\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded."
+                  }
+                ]
+              }
+            ],
+            "generationConfig": {
+              "temperature": 0.3,
+              "maxOutputTokens": 4096
+            }
+          }
+        },
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=snap-key",
+          "body": {
+            "contents": [
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "«system_identity»\n\n<session_start_context>\n# Earlier in this session\n- Read src/parser.ts\n- Ran the parser tests (3 pass)\n</session_start_context>\n\nThe context above is what you have already recorded for this work. Continue from\nthere: do not re-record it, and do not treat its absence from the conversation\nabove as meaning the work did not happen.\n\n<observed_from_primary_session>\n  <user_request>Refactor the parser</user_request>\n  <requested_at>2026-09-21</requested_at>\n</observed_from_primary_session>\n\n«observer_role»\n\n«spatial_awareness»\n\n«recording_focus»\n\n«skip_guidance»\n\n«output_format_header»\n\n<observation>\n  <type>[ discovery | bugfix ]</type>\n  <!--\n    «type_guidance»\n  -->\n  <title>«xml_title_placeholder»</title>\n  <subtitle>«xml_subtitle_placeholder»</subtitle>\n  <facts>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n    <fact>«xml_fact_placeholder»</fact>\n  </facts>\n  <!--\n    «field_guidance»\n  -->\n  <narrative>«xml_narrative_placeholder»</narrative>\n  <concepts>\n    <concept>«xml_concept_placeholder»</concept>\n    <concept>«xml_concept_placeholder»</concept>\n  </concepts>\n  <!--\n    «concept_guidance»\n  -->\n  <files_read>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_read>\n  <files_modified>\n    <file>«xml_file_placeholder»</file>\n    <file>«xml_file_placeholder»</file>\n  </files_modified>\n</observation>\n«format_examples»\n\n«footer»\n\n«header_memory_start»"
+                  }
+                ]
+              },
+              {
+                "role": "model",
+                "parts": [
+                  {
+                    "text": "Ready to observe."
+                  }
+                ]
+              },
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "<observed_from_primary_session>\n  <what_happened>Read</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"file_path\": \"src/parser.ts\"\n}</parameters>\n  <outcome>{\n  \"content\": \"export function parse() {}\"\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded."
+                  }
+                ]
+              },
+              {
+                "role": "model",
+                "parts": [
+                  {
+                    "text": "<observation>\n  <type>discovery</type>\n  <title>Parser entry point</title>\n  <subtitle>parse() lives in src/parser.ts</subtitle>\n  <facts><fact>parse is exported</fact></facts>\n  <narrative>The parser exposes a single parse() function.</narrative>\n  <concepts><concept>how-it-works</concept></concepts>\n  <files_read></files_read>\n  <files_modified></files_modified>\n</observation>"
+                  }
+                ]
+              },
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "<observed_from_primary_session>\n  <what_happened>Bash</what_happened>\n  <occurred_at>2026-09-21T09:00:00.000Z</occurred_at>\n  <working_directory>/work/snap</working_directory>\n  <parameters>{\n  \"command\": \"bun test tests/parser.test.ts\"\n}</parameters>\n  <outcome>{\n  \"stdout\": \"3 pass\\n0 fail\",\n  \"exitCode\": 0\n}</outcome>\n</observed_from_primary_session>\n\nIf a <parameters> or <outcome> block above contains an \"<elided chars=... />\" marker, that field was truncated to fit the observer's context window. Describe only what you can see in the kept portion and do not infer details about the elided range.\n\nReturn either one or more <observation>...</observation> blocks, or <skip_summary reason=\"noise\" /> if this tool use should be skipped.\nConcrete debugging findings from logs, queue state, database rows, session routing, or code-path inspection count as durable discoveries and should be recorded.\nNever reply with prose such as \"Skipping\", \"No substantive tool executions\", or any explanation outside XML. Non-XML text is discarded."
+                  }
+                ]
+              },
+              {
+                "role": "model",
+                "parts": [
+                  {
+                    "text": "<observation>\n  <type>discovery</type>\n  <title>Parser entry point</title>\n  <subtitle>parse() lives in src/parser.ts</subtitle>\n  <facts><fact>parse is exported</fact></facts>\n  <narrative>The parser exposes a single parse() function.</narrative>\n  <concepts><concept>how-it-works</concept></concepts>\n  <files_read></files_read>\n  <files_modified></files_modified>\n</observation>"
+                  }
+                ]
+              },
+              {
+                "role": "user",
+                "parts": [
+                  {
+                    "text": "--- MODE SWITCH: PROGRESS SUMMARY ---\n⚠️ CRITICAL TAG REQUIREMENT — READ CAREFULLY:\n• You MUST wrap your ENTIRE response in <summary>...</summary> tags.\n• Do NOT use <observation> tags. <observation> output will be DISCARDED and cause a system error.\n• The ONLY accepted root tag is <summary>. Any other root tag is a protocol violation.\n\n«header_summary_checkpoint»\n«summary_instruction»\n\n«summary_context_label»\nParser refactored and tests pass.\n\n«summary_format_instruction»\n<summary>\n  <request>«xml_summary_request_placeholder»</request>\n  <investigated>«xml_summary_investigated_placeholder»</investigated>\n  <learned>«xml_summary_learned_placeholder»</learned>\n  <completed>«xml_summary_completed_placeholder»</completed>\n  <next_steps>«xml_summary_next_steps_placeholder»</next_steps>\n  <notes>«xml_summary_notes_placeholder»</notes>\n</summary>\n\nREMINDER: Your response MUST use <summary> as the root tag, NOT <observation>.\n«summary_footer»"
+                  }
+                ]
+              }
+            ],
+            "generationConfig": {
+              "temperature": 0.3,
+              "maxOutputTokens": 4096
+            }
+          }
+        }
+      ],
+      "confirmedIdSets": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ]
+      ],
+      "resetCalls": 1,
+      "storeCalls": 3,
+      "historyRoles": [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant"
+      ]
+    }
+  }
+}

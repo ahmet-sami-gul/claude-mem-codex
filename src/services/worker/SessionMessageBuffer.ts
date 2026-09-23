@@ -127,6 +127,19 @@ export class SessionMessageBuffer {
     return this.buffers.get(sessionDbId)?.length ?? 0;
   }
 
+  /**
+   * Buffered messages no generator has claimed yet — the work that is actually
+   * waiting, as opposed to getPendingCount, which also counts the batch a
+   * generator is processing right now.
+   */
+  getUnclaimedCount(sessionDbId: number): number {
+    let unclaimed = 0;
+    for (const m of this.buffers.get(sessionDbId) ?? []) {
+      if (!m.claimed) unclaimed++;
+    }
+    return unclaimed;
+  }
+
   getTotalDepth(): number {
     let total = 0;
     for (const list of this.buffers.values()) {
@@ -205,6 +218,72 @@ export class SessionMessageBuffer {
         lastActivityTime = Date.now();
       }
     }
+  }
+
+  /**
+   * Claim further buffered messages, in FIFO order, for the batch a generator
+   * is building (M4 observation batching).
+   *
+   * Walks the unclaimed messages oldest first and claims each one `accept`
+   * says yes to, up to `max`. It stops at the FIRST message `accept` rejects
+   * and never looks past it: a batch is always a contiguous run of the queue,
+   * so a summarize request (or an observation from another prompt, agent or
+   * directory) is never skipped over and answered out of order — it simply
+   * ends the batch, and the drain yields it next.
+   *
+   * `accept` is called at most once per message, in queue order, and not at
+   * all once the batch is full or a message has been rejected, so it may keep
+   * running totals (a character budget) across calls.
+   */
+  claimContiguous(
+    sessionDbId: number,
+    accept: (message: PendingMessageWithId) => boolean,
+    max: number,
+  ): PendingMessageWithId[] {
+    const claimed: PendingMessageWithId[] = [];
+    const list = this.buffers.get(sessionDbId);
+    if (!list || !(max > 0)) return claimed;
+
+    for (const entry of list) {
+      if (claimed.length >= max) break;
+      // Already claimed: the batch being built (or an unconfirmed earlier
+      // one). Claimed work is in flight, not waiting, so it neither joins nor
+      // ends this batch.
+      if (entry.claimed) continue;
+      const view = this.toPendingWithId(entry);
+      if (!accept(view)) break;
+      entry.claimed = true;
+      claimed.push(view);
+    }
+
+    if (claimed.length > 0) {
+      this.onMutate?.();
+    }
+    return claimed;
+  }
+
+  /**
+   * Wait until a message is enqueued for this session (true), or until the
+   * signal aborts or `timeoutMs` passes (false). The batch linger's view of
+   * the same wait the drain uses between messages.
+   *
+   * Unlike the private wait it wraps, an already-aborted signal or a
+   * non-positive timeout answers false at once instead of sitting out the
+   * whole timeout.
+   */
+  waitForNewMessage(sessionDbId: number, signal: AbortSignal, timeoutMs: number): Promise<boolean> {
+    if (signal.aborted || !(timeoutMs > 0)) {
+      return Promise.resolve(false);
+    }
+    return this.waitForMessage(sessionDbId, signal, timeoutMs);
+  }
+
+  private toPendingWithId(buffered: BufferedMessage): PendingMessageWithId {
+    return {
+      ...buffered.message,
+      _persistentId: buffered.id,
+      _originalTimestamp: buffered.enqueuedAt,
+    };
   }
 
   private claimNext(sessionDbId: number): BufferedMessage | null {
