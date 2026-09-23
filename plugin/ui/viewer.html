@@ -1721,6 +1721,11 @@
       color: var(--error-color, #ef4444);
     }
 
+    .modal-footer .save-status .save-blocker {
+      display: block;
+      font-size: 12px;
+    }
+
     .modal-footer .save-btn {
       padding: 8px 24px;
       background: var(--accent-color, #3b82f6);
@@ -1927,6 +1932,7 @@
     }
 
     .form-field input[type="number"],
+    .form-field input[inputmode="numeric"],
     .form-field select {
       width: 100%;
       background: var(--color-bg-input);
@@ -1940,15 +1946,66 @@
     }
 
     .form-field input[type="number"]:hover,
+    .form-field input[inputmode="numeric"]:hover,
     .form-field select:hover {
       border-color: var(--color-border-hover);
     }
 
     .form-field input[type="number"]:focus,
+    .form-field input[inputmode="numeric"]:focus,
     .form-field select:focus {
       outline: none;
       border-color: var(--color-border-focus);
       box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.1);
+    }
+
+    .form-field select option:disabled {
+      color: var(--color-text-muted);
+    }
+
+    .form-field-hint,
+    .form-field-note,
+    .form-field-warning,
+    .form-field-error {
+      font-size: 11px;
+      line-height: 1.4;
+      margin: 6px 0 0 0;
+    }
+
+    .form-field-hint {
+      color: var(--color-text-muted);
+    }
+
+    .form-field-note {
+      color: var(--color-text-muted);
+      margin: 0 0 12px 0;
+      padding: 8px 10px;
+      border-left: 2px solid var(--color-border-primary);
+    }
+
+    .form-field-warning {
+      color: var(--color-accent-summary);
+      padding: 6px 8px;
+      border: 1px solid var(--color-border-summary);
+      border-radius: 6px;
+    }
+
+    .form-field-error {
+      color: var(--color-accent-error);
+    }
+
+    .form-field input[aria-invalid="true"],
+    .form-field select[aria-invalid="true"] {
+      border-color: var(--color-accent-error);
+    }
+
+    .form-field-readonly {
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border-secondary);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--color-text-primary);
     }
 
     /* ============================================
