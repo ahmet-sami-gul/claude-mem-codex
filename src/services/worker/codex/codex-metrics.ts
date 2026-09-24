@@ -19,7 +19,10 @@
  *   - forbidden-tool attempts seen by the runner's guard, and calls the local
  *     5-hour budget refused;
  *   - waiting observations the queue cap dropped
- *     (CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS, SessionManager).
+ *     (CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS, SessionManager);
+ *   - subagent tool uses kept out of the observer
+ *     (CLAUDE_MEM_SUBAGENT_EVENTS, ingestObservation) — counted whatever the
+ *     provider, shown on /api/health while Codex is the provider.
  *
  * Counts only: no prompt, reply, tool payload, session id or project name ever
  * reaches this module. The counters are process-lifetime and in memory (the
@@ -75,6 +78,8 @@ export interface CodexMetricsSnapshot {
   budgetRefusals: number;
   /** Waiting observations dropped by CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS (never sent). */
   queuedObservationsDropped: number;
+  /** Subagent tool uses CLAUDE_MEM_SUBAGENT_EVENTS kept out of the observer (still in tool_uses, never queued). */
+  subagentEventsSkipped: number;
 }
 
 function purposeKey(purpose: CodexCallPurpose): keyof CodexMetricsSnapshot['calls'] {
@@ -147,6 +152,10 @@ export class CodexMetrics {
     this.state.queuedObservationsDropped += safeCount(count);
   }
 
+  recordSubagentEventSkipped(): void {
+    this.state.subagentEventsSkipped += 1;
+  }
+
   snapshot(): CodexMetricsSnapshot {
     const s = this.state;
     return {
@@ -165,6 +174,7 @@ export class CodexMetrics {
       toolAttempts: s.toolAttempts,
       budgetRefusals: s.budgetRefusals,
       queuedObservationsDropped: s.queuedObservationsDropped,
+      subagentEventsSkipped: s.subagentEventsSkipped,
     };
   }
 
@@ -183,6 +193,7 @@ export class CodexMetrics {
       toolAttempts: 0,
       budgetRefusals: 0,
       queuedObservationsDropped: 0,
+      subagentEventsSkipped: 0,
     };
   }
 }
@@ -230,6 +241,7 @@ export function startCodexMetricsReporter(options: CodexMetricsReporterOptions =
       && snapshot.budgetRefusals === 0
       && snapshot.skipped.init === 0
       && snapshot.queuedObservationsDropped === 0
+      && snapshot.subagentEventsSkipped === 0
     ) return false;
     logger.info('SDK', 'Codex observer usage', {
       since: new Date(snapshot.sinceMs).toISOString(),
@@ -243,6 +255,7 @@ export function startCodexMetricsReporter(options: CodexMetricsReporterOptions =
       toolAttempts: snapshot.toolAttempts,
       budgetRefusals: snapshot.budgetRefusals,
       queuedObservationsDropped: snapshot.queuedObservationsDropped,
+      subagentEventsSkipped: snapshot.subagentEventsSkipped,
     });
     return true;
   };

@@ -23,6 +23,7 @@ Settings are managed in `~/.claude-mem/settings.json`. The file is auto-created 
 | `CLAUDE_MEM_TV_TOKEN`         | —                               | Shared secret for Observation TV remote access. Empty = off. With a non-loopback `CLAUDE_MEM_WORKER_HOST`, only `/tv`, `/tv.html`, `/stream` and `GET /api/observations` are reachable, and only with this token. |
 | `CLAUDE_MEM_DATA_DIR`         | `~/.claude-mem`                 | Data root — every other path (database, chroma, logs, settings.json, worker.pid) derives from this |
 | `CLAUDE_MEM_SKIP_TOOLS`       | `ListMcpResourcesTool,SlashCommand,Skill,TodoWrite,AskUserQuestion` | Comma-separated tools to exclude from observations |
+| `CLAUDE_MEM_SUBAGENT_EVENTS`  | `all`                           | Which subagent tool uses are sent to the observer: `all`, `writes` (only `Edit`, `Write`, `MultiEdit`, `NotebookEdit`) or `none`. Main-session tool uses are never affected, and skipped ones are still stored in the tool-use index (`get_tool_uses`). **File/env only** |
 
 ### Gemini Provider Settings
 

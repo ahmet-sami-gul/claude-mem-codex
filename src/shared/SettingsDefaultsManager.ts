@@ -26,6 +26,10 @@ export interface SettingsDefaults {
   CLAUDE_MEM_WORKER_HOST: string;
   CLAUDE_MEM_API_TIMEOUT_MS: string;
   CLAUDE_MEM_SKIP_TOOLS: string;
+  // Which of a subagent's tool uses reach the observer (ingestObservation).
+  // File/env only, like the codex cost levers below: POST /api/settings never
+  // writes it.
+  CLAUDE_MEM_SUBAGENT_EVENTS: string;
   CLAUDE_MEM_PROVIDER: string;  
   CLAUDE_MEM_CLAUDE_AUTH_METHOD: string;  
   CLAUDE_MEM_GEMINI_API_KEY: string;
@@ -202,6 +206,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_WORKER_HOST: '127.0.0.1',
     CLAUDE_MEM_API_TIMEOUT_MS: String(getTimeout(HOOK_TIMEOUTS.API_REQUEST)),
     CLAUDE_MEM_SKIP_TOOLS: 'ListMcpResourcesTool,SlashCommand,Skill,TodoWrite,AskUserQuestion',
+    CLAUDE_MEM_SUBAGENT_EVENTS: 'all',  // 'all', 'writes' (Edit/Write/MultiEdit/NotebookEdit only) or 'none'; skipped ones still land in tool_uses (file/env only)
     // Deliberate divergence from the installer prompt: the interactive
     // provider prompt defaults to 'cmem' (the hosted observer), but headless
     // installs land here — no delivered key exists headlessly, so the settings

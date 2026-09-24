@@ -208,6 +208,8 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     ['CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT', '50'],
     ['CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS', '3600000'],
     ['CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION', 'true'],
+    ['CLAUDE_MEM_SUBAGENT_EVENTS', 'all'],
+    ['CLAUDE_MEM_SUBAGENT_EVENTS', 'none'],
   ])('accepts but never persists the cost lever %s', (key, value) => {
     persist({ CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '40', [key]: key === 'CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H' ? '40' : '' });
     const before = persisted()[key];
@@ -262,6 +264,8 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     ['CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS', '1000'],
     ['CLAUDE_MEM_CODEX_TRANSPORT', 'app-server'],
     ['CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION', 'maybe'],
+    ['CLAUDE_MEM_SUBAGENT_EVENTS', 'reads'],
+    ['CLAUDE_MEM_SUBAGENT_EVENTS', 'Writes'],
   ])('rejects %s = %s with 400 and writes nothing', (key, value) => {
     const before = readFileSync(settingsPath, 'utf-8');
 
@@ -297,6 +301,8 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     ['CLAUDE_MEM_CODEX_FIELD_COMPRESSION', true],
     ['CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H', 40],
     ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', 500],
+    ['CLAUDE_MEM_SUBAGENT_EVENTS', true],
+    ['CLAUDE_MEM_SUBAGENT_EVENTS', ['all']],
   ])('rejects the non-string %s = %p and writes nothing', (key, value) => {
     const before = readFileSync(settingsPath, 'utf-8');
 
@@ -321,6 +327,7 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     ['CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H', '-4'],
     ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', '10'],
     ['CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION', 'yes'],
+    ['CLAUDE_MEM_SUBAGENT_EVENTS', 'reads'],
   ])('keeps the viewer round-trip working when %s is out of bounds in settings.json', (key, value) => {
     persist({ [key]: value });
     handlers = captureHandlers(new SettingsRoutes({} as any));
@@ -337,6 +344,22 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     expect(persisted().CLAUDE_MEM_CODEX_VERBOSITY).toBe('medium');
     // Still file/env only: accepted, never written.
     expect(persisted()[key]).toBe(value);
+  });
+
+  it.each([
+    ['writes', 'all'],
+    ['none', 'all'],
+    ['all', 'none'],
+  ])('cannot move CLAUDE_MEM_SUBAGENT_EVENTS from %s to %s over the API', (stored, requested) => {
+    persist({ CLAUDE_MEM_SUBAGENT_EVENTS: stored });
+    handlers = captureHandlers(new SettingsRoutes({} as any));
+
+    const { jsonSpy } = post({ CLAUDE_MEM_SUBAGENT_EVENTS: requested, CLAUDE_MEM_CODEX_VERBOSITY: 'medium' });
+
+    // Valid, so a save of other settings is not broken — the value is just never written.
+    expect(jsonSpy).toHaveBeenCalledWith({ success: true, message: 'Settings updated successfully' });
+    expect(persisted().CLAUDE_MEM_CODEX_VERBOSITY).toBe('medium');
+    expect(persisted().CLAUDE_MEM_SUBAGENT_EVENTS).toBe(stored);
   });
 
   /**
@@ -444,6 +467,7 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
       CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '800',
       CLAUDE_MEM_CODEX_TIMEOUT_MS: '5',           // out of range in the file
       CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION: 'true',
+      CLAUDE_MEM_SUBAGENT_EVENTS: 'writes',
     });
     handlers = captureHandlers(new SettingsRoutes({} as any));
     const body = viewerRoundTripBody();
@@ -478,6 +502,7 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
       CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '200',
       CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '800',
       CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION: 'true',
+      CLAUDE_MEM_SUBAGENT_EVENTS: 'writes',
     });
   });
 
@@ -537,6 +562,8 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     ['CLAUDE_MEM_CODEX_PATH', null],
     ['CLAUDE_MEM_CODEX_PATH', '   '],
     ['CLAUDE_MEM_CODEX_HOME', 42],
+    ['CLAUDE_MEM_SUBAGENT_EVENTS', ['writes']],
+    ['CLAUDE_MEM_SUBAGENT_EVENTS', { mode: 'writes' }],
   ])('saves unrelated settings while settings.json holds %s = %p', (key, value) => {
     writeFileSync(
       settingsPath,
@@ -552,6 +579,21 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     expect(persisted().CLAUDE_MEM_CONTEXT_OBSERVATIONS).toBe('60');
     // File/env only: left exactly as the user wrote it.
     expect(persisted()[key]).toEqual(value as never);
+  });
+
+  it('saves unrelated settings after CLAUDE_MEM_SUBAGENT_EVENTS is fixed in the file while the modal is open', () => {
+    persist({ CLAUDE_MEM_SUBAGENT_EVENTS: 'reads' });
+    handlers = captureHandlers(new SettingsRoutes({} as any));
+    const fromGet = viewerRoundTripBody();
+    expect(fromGet.CLAUDE_MEM_SUBAGENT_EVENTS).toBe('reads');
+    persist({ CLAUDE_MEM_SUBAGENT_EVENTS: 'writes' });
+
+    const { jsonSpy, statusSpy } = post(buildSettingsSaveBody({ ...fromGet, CLAUDE_MEM_CONTEXT_OBSERVATIONS: '60' }, fromGet));
+
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(jsonSpy).toHaveBeenCalledWith({ success: true, message: 'Settings updated successfully' });
+    expect(persisted().CLAUDE_MEM_CONTEXT_OBSERVATIONS).toBe('60');
+    expect(persisted().CLAUDE_MEM_SUBAGENT_EVENTS).toBe('writes');
   });
 
   it('writes the codex values the user edits in the modal', () => {

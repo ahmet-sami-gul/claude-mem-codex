@@ -4,6 +4,7 @@ import { join } from 'path';
 import { CODEX_CONFIG_BOUNDS } from '../../src/services/worker/CodexProvider.js';
 import { CLAIM_MATCHING_LOOKAHEAD } from '../../src/services/worker/SessionMessageBuffer.js';
 import { QUEUE_CAP_WARN_EVERY } from '../../src/services/worker/SessionManager.js';
+import { SUBAGENT_EVENTS_MODES, SUBAGENT_WRITE_TOOLS } from '../../src/services/worker/http/shared.js';
 import {
   CODEX_CONFIG_PINS,
   CODEX_DEFAULT_MODEL,
@@ -23,6 +24,7 @@ import {
   CODEX_PROBE_TIMEOUTS_MS,
   CODEX_TESTED_VERSION_RANGE,
 } from '../../src/services/worker/codex/codex-self-check.js';
+import { buildSettingsSaveBody } from '../../src/ui/viewer/constants/codex';
 
 /**
  * The Codex provider docs (plan 3.11) against the code they describe.
@@ -49,6 +51,13 @@ function serverCodexDefaults(): Map<string, string> {
     defaults.set(match[1], match[2]);
   }
   return defaults;
+}
+
+/** CLAUDE_MEM_SUBAGENT_EVENTS's default from the DEFAULTS literal. */
+function subagentEventsDefault(): string {
+  const match = read('src/shared/SettingsDefaultsManager.ts').match(/^\s*CLAUDE_MEM_SUBAGENT_EVENTS:\s*'([^']*)',/m);
+  expect(match).not.toBeNull();
+  return match![1];
 }
 
 /** The keys POST /api/settings writes (the `settingKeys` array in SettingsRoutes). */
@@ -116,6 +125,40 @@ describe('docs/public/usage/codex-provider.mdx', () => {
     expect(codexPage).toContain('### The waiting-observation cap');
     expect(codexPage).toContain('`ai.codex.metrics.queuedObservationsDropped`');
     expect(codexPage).toContain(`then once per ${QUEUE_CAP_WARN_EVERY} drops`);
+  });
+
+  it('documents CLAUDE_MEM_SUBAGENT_EVENTS: what each mode keeps, the index, the metric, file/env only', () => {
+    const [, defaultCell, effect] = tableRow(codexPage, 'CLAUDE_MEM_SUBAGENT_EVENTS');
+    expect(documentedDefault(defaultCell)).toBe(subagentEventsDefault());
+    for (const mode of SUBAGENT_EVENTS_MODES) expect(effect).toContain(`\`${mode}\``);
+    expect(effect).toContain('File/env only');
+
+    expect(codexPage).toContain('**Keep subagents to their file writes.**');
+    expect(codexPage).toContain('- `all` (default): every one, as before.');
+    const writesItem = codexPage.split('\n').find(line => line.startsWith('- `writes`:'));
+    expect(writesItem).toBeDefined();
+    for (const tool of SUBAGENT_WRITE_TOOLS) expect(writesItem).toContain(`\`${tool}\``);
+    expect(writesItem).toContain('including its Bash commands, so a `git commit` made by a subagent is not remembered');
+    expect(codexPage).toContain('- `none`: none.');
+    expect(codexPage).toContain('Tool uses of the main session are never affected.');
+    expect(codexPage).toContain('still stored in the tool-use index (the `get_tool_uses` MCP tool finds it)');
+    expect(codexPage).toContain('`ai.codex.metrics.subagentEventsSkipped`');
+    expect(codexPage).toContain('(`subagentEventsSkipped`)');
+    expect(codexPage).toContain('"CLAUDE_MEM_SUBAGENT_EVENTS": "writes"');
+
+    // File/env only: off the route's write allowlist, and named in the file/env-only bullet.
+    expect(routeWriteAllowlist().has('CLAUDE_MEM_SUBAGENT_EVENTS')).toBe(false);
+    const bullet = codexPage.split('\n').find(line => line.startsWith('- **File or environment only:**'));
+    expect(bullet).toContain('`CLAUDE_MEM_SUBAGENT_EVENTS`');
+
+    // "The viewer never sends them" holds for every key the bullet names (the
+    // provider is the viewer's own select, sent only when changed).
+    expect(bullet).toContain('the viewer never sends them');
+    const named = [...bullet!.matchAll(/`(CLAUDE_MEM_[A-Z0-9_]+)`/g)].map(match => match[1]).filter(key => key !== 'CLAUDE_MEM_PROVIDER');
+    expect(named).toContain('CLAUDE_MEM_SUBAGENT_EVENTS');
+    for (const key of named) {
+      expect(key in buildSettingsSaveBody({ [key]: 'changed' }, { [key]: 'stored' })).toBe(false);
+    }
   });
 
   it('lists the allowlisted models and the file/env model pattern', () => {
@@ -218,6 +261,18 @@ describe('docs/public/configuration.mdx codex table', () => {
       const [, defaultCell] = tableRow(configurationPage, key);
       expect(documentedDefault(defaultCell)).toBe(value);
     }
+  });
+});
+
+describe('docs/public/configuration.mdx CLAUDE_MEM_SUBAGENT_EVENTS row', () => {
+  it('states the default, every mode, the write tools, the index and file/env only', () => {
+    const [, defaultCell, description] = tableRow(configurationPage, 'CLAUDE_MEM_SUBAGENT_EVENTS');
+    expect(documentedDefault(defaultCell)).toBe(subagentEventsDefault());
+    for (const mode of SUBAGENT_EVENTS_MODES) expect(description).toContain(`\`${mode}\``);
+    for (const tool of SUBAGENT_WRITE_TOOLS) expect(description).toContain(`\`${tool}\``);
+    expect(description).toContain('Main-session tool uses are never affected');
+    expect(description).toContain('`get_tool_uses`');
+    expect(description).toContain('**File/env only**');
   });
 });
 

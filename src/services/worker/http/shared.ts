@@ -13,6 +13,7 @@ import { normalizePlatformSource } from '../../../shared/platform-source.js';
 import { PrivacyCheckValidator } from '../validation/PrivacyCheckValidator.js';
 import { captureEvent } from '../../telemetry/telemetry.js';
 import { classifySkillId, skillNameFromToolInput } from '../../telemetry/skill-id.js';
+import { codexMetrics } from '../codex/codex-metrics.js';
 
 interface IngestContext {
   sessionManager: SessionManager;
@@ -63,6 +64,44 @@ export interface ObservationPayload {
    */
   orGenerationId?: string;
   orSessionId?: string;
+}
+
+/**
+ * CLAUDE_MEM_SUBAGENT_EVENTS: which of a subagent's tool uses (an event with a
+ * non-empty agentId) are sent to the observer. `all` sends every one, as
+ * before the setting existed; `writes` only the file writes below; `none`
+ * none. Main-session events are never filtered. File/env only: the settings
+ * POST route validates it but never writes it.
+ */
+export const SUBAGENT_EVENTS_MODES = ['all', 'writes', 'none'] as const;
+export type SubagentEventsMode = typeof SUBAGENT_EVENTS_MODES[number];
+const DEFAULT_SUBAGENT_EVENTS_MODE: SubagentEventsMode = 'all';
+
+/** The subagent tool uses CLAUDE_MEM_SUBAGENT_EVENTS=writes still sends to the observer. */
+export const SUBAGENT_WRITE_TOOLS: readonly string[] = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
+
+/** One warning per distinct bad value, so a wrong setting is not logged per event. */
+const warnedSubagentEventsValues = new Set<string>();
+
+/**
+ * CLAUDE_MEM_SUBAGENT_EVENTS as loaded (settings.json, then the environment).
+ * Empty means the default; anything else it cannot use — an unknown word, or
+ * a JSON non-string from a hand-edited file — falls back to `all` with one
+ * warning per distinct value. Never throws.
+ */
+export function resolveSubagentEventsMode(raw: unknown): SubagentEventsMode {
+  if (raw === undefined || raw === null) return DEFAULT_SUBAGENT_EVENTS_MODE;
+  const text = typeof raw === 'string' ? raw.trim().toLowerCase() : null;
+  if (text === '') return DEFAULT_SUBAGENT_EVENTS_MODE;
+  if (text !== null && (SUBAGENT_EVENTS_MODES as readonly string[]).includes(text)) {
+    return text as SubagentEventsMode;
+  }
+  const configured = text ?? (JSON.stringify(raw) ?? String(raw));
+  if (!warnedSubagentEventsValues.has(configured)) {
+    warnedSubagentEventsValues.add(configured);
+    logger.warn('INGEST', `Invalid CLAUDE_MEM_SUBAGENT_EVENTS; using ${DEFAULT_SUBAGENT_EVENTS_MODE} instead`, { configured });
+  }
+  return DEFAULT_SUBAGENT_EVENTS_MODE;
 }
 
 export async function ingestObservation(payload: ObservationPayload): Promise<IngestResult> {
@@ -184,6 +223,25 @@ export async function ingestObservation(payload: ObservationPayload): Promise<In
         toolName: payload.toolName,
         toolUseId: payload.toolUseId,
       }, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  // CLAUDE_MEM_SUBAGENT_EVENTS. Deliberately after the dual-write and before
+  // the queue: a filtered subagent tool use keeps its raw tool_uses row (the
+  // durable index loses nothing), but it is never queued, never starts a
+  // generator and never costs an observer call. Main-session events (no
+  // agentId) are never filtered, and the setting is read only for subagents.
+  if (typeof payload.agentId === 'string' && payload.agentId.length > 0) {
+    const mode = resolveSubagentEventsMode(settings.CLAUDE_MEM_SUBAGENT_EVENTS);
+    if (mode === 'none' || (mode === 'writes' && !SUBAGENT_WRITE_TOOLS.includes(payload.toolName))) {
+      codexMetrics.recordSubagentEventSkipped();
+      logger.debug('INGEST', 'Subagent tool use kept out of the observer (CLAUDE_MEM_SUBAGENT_EVENTS)', {
+        sessionId: sessionDbId,
+        toolName: payload.toolName,
+        agentType: payload.agentType,
+        mode,
+      });
+      return { ok: true, status: 'skipped', reason: 'subagent_filtered' };
     }
   }
 

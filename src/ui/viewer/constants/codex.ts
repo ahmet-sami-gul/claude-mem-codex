@@ -118,6 +118,13 @@ export const CODEX_FILE_ONLY_KEYS: readonly string[] = [
 ];
 
 /**
+ * File/env-only keys outside the CLAUDE_MEM_CODEX_* family, left out of every
+ * save for the same reasons. CLAUDE_MEM_SUBAGENT_EVENTS has no field in the
+ * modal, but GET returns it, so the form would otherwise carry it back.
+ */
+export const OTHER_FILE_ONLY_KEYS: readonly string[] = ['CLAUDE_MEM_SUBAGENT_EVENTS'];
+
+/**
  * The body the modal POSTs: the form, minus what it must not send back.
  *
  * GET /api/settings returns settings.json with the worker's environment
@@ -127,7 +134,8 @@ export const CODEX_FILE_ONLY_KEYS: readonly string[] = [
  * meant to allow only through the file or the environment: its "unchanged"
  * check reads the same env-applied value, so it accepts the copy. So:
  *
- *   - the eight file/env-only codex keys are never sent (CODEX_FILE_ONLY_KEYS);
+ *   - the eight file/env-only codex keys are never sent (CODEX_FILE_ONLY_KEYS),
+ *     nor is CLAUDE_MEM_SUBAGENT_EVENTS (OTHER_FILE_ONLY_KEYS);
  *   - CLAUDE_MEM_PROVIDER and every other CLAUDE_MEM_CODEX_* key is sent only
  *     when the user changed it from what GET returned (`persisted`).
  *
@@ -137,7 +145,7 @@ export const CODEX_FILE_ONLY_KEYS: readonly string[] = [
 export function buildSettingsSaveBody<T extends object>(form: T, persisted: T): T {
   const body: Record<string, unknown> = { ...(form as Record<string, unknown>) };
   const before = persisted as Record<string, unknown>;
-  for (const key of CODEX_FILE_ONLY_KEYS) {
+  for (const key of [...CODEX_FILE_ONLY_KEYS, ...OTHER_FILE_ONLY_KEYS]) {
     delete body[key];
   }
   for (const key of Object.keys(body)) {

@@ -93,6 +93,16 @@ describe('CodexMetrics', () => {
     expect(metrics.snapshot().queuedObservationsDropped).toBe(0);
   });
 
+  it('counts the subagent tool uses CLAUDE_MEM_SUBAGENT_EVENTS kept out of the observer', () => {
+    const metrics = new CodexMetrics();
+    expect(metrics.snapshot().subagentEventsSkipped).toBe(0);
+    metrics.recordSubagentEventSkipped();
+    metrics.recordSubagentEventSkipped();
+    expect(metrics.snapshot().subagentEventsSkipped).toBe(2);
+    metrics.reset();
+    expect(metrics.snapshot().subagentEventsSkipped).toBe(0);
+  });
+
   it('ignores garbage numbers rather than corrupting the totals', () => {
     const metrics = new CodexMetrics();
     metrics.recordUsage({ input: Number.NaN, cached: -4, output: Number.POSITIVE_INFINITY, reasoning: 2.9 });
@@ -199,6 +209,18 @@ describe('startCodexMetricsReporter', () => {
     expect(reporter.report()).toBe(true);
     const [, , fields] = info.mock.calls[0] as [string, string, Record<string, unknown>];
     expect(fields).toMatchObject({ execs: 0, queuedObservationsDropped: 7 });
+    reporter.stop();
+  });
+
+  it('reports skipped subagent tool uses even when no exec has run', () => {
+    const info = spyOn(logger, 'info').mockImplementation(() => {});
+    spies.push(info);
+    const metrics = new CodexMetrics();
+    metrics.recordSubagentEventSkipped();
+    const reporter = startCodexMetricsReporter({ metrics, ...manualInterval() });
+    expect(reporter.report()).toBe(true);
+    const [, , fields] = info.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(fields).toMatchObject({ execs: 0, subagentEventsSkipped: 1 });
     reporter.stop();
   });
 });

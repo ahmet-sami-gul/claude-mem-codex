@@ -14,6 +14,7 @@ import { clearPortCache } from '../../../../shared/worker-utils.js';
 import { snapshotDependencyHealth } from '../../../../shared/dependency-health.js';
 import { parseJsonWithBom, writeJsonFileAtomic } from '../../../../shared/atomic-json.js';
 import { CODEX_MODEL_ALLOWLIST, MODEL_ID_RE } from '../../codex/codex-invocation.js';
+import { SUBAGENT_EVENTS_MODES } from '../shared.js';
 
 const toggleMcpSchema = z.object({
   enabled: z.boolean(),
@@ -135,6 +136,10 @@ export class SettingsRoutes extends BaseRouteHandler {
     // the conversation and batch budgets, field compression, and the two model
     // keys, which validateSettings additionally pins to CODEX_MODEL_ALLOWLIST
     // (or the value already persisted, so the viewer round-trip still works).
+    //
+    // CLAUDE_MEM_SUBAGENT_EVENTS is file/env only for the same reason: from
+    // 'writes' or 'none', a page could set 'all' and send every subagent tool
+    // use to the observer again.
     const settingKeys = [
       'CLAUDE_MEM_MODEL',
       'CLAUDE_MEM_CONTEXT_OBSERVATIONS',
@@ -260,6 +265,18 @@ export class SettingsRoutes extends BaseRouteHandler {
     const codexError = this.validateCodexSettings(settings, persisted);
     if (codexError) {
       return { valid: false, error: codexError };
+    }
+
+    // File/env only (never written here), but validated like the codex cost
+    // levers: the value already stored is accepted, so a client posting the
+    // GET body back keeps working whatever the file holds.
+    const subagentEvents = settings.CLAUDE_MEM_SUBAGENT_EVENTS;
+    if (
+      subagentEvents !== undefined && subagentEvents !== null && subagentEvents !== ''
+      && subagentEvents !== persisted.CLAUDE_MEM_SUBAGENT_EVENTS
+      && !(SUBAGENT_EVENTS_MODES as readonly unknown[]).includes(subagentEvents)
+    ) {
+      return { valid: false, error: `CLAUDE_MEM_SUBAGENT_EVENTS must be one of: ${SUBAGENT_EVENTS_MODES.join(', ')}` };
     }
 
     if (settings.CLAUDE_MEM_CLAUDE_AUTH_METHOD) {

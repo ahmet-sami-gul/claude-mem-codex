@@ -511,6 +511,12 @@ describe('SettingsDefaultsManager', () => {
       expect(SettingsDefaultsManager.getAllDefaults().CLAUDE_MEM_CLAUDE_CONFIG_DIR).toBe('');
     });
 
+    // Every subagent tool use is observed until the user opts out in the file
+    // or the environment (ingestObservation, file/env only).
+    it('CLAUDE_MEM_SUBAGENT_EVENTS defaults to all', () => {
+      expect(SettingsDefaultsManager.getAllDefaults().CLAUDE_MEM_SUBAGENT_EVENTS).toBe('all');
+    });
+
     it('cloud sync content flush knobs default to 40 ops / 90s', () => {
       const defaults = SettingsDefaultsManager.getAllDefaults();
       expect(defaults.CLAUDE_MEM_CLOUD_SYNC_CONTENT_BATCH_SIZE).toBe('40');

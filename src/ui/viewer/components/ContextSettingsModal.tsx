@@ -434,7 +434,7 @@ export function ContextSettingsModal({
   const handleSave = useCallback(() => {
     if (!canSave) return;
     // Not the whole form: buildSettingsSaveBody leaves out the file/env-only
-    // codex keys and any provider or codex value the user did not change, so
+    // keys and any provider or codex value the user did not change, so
     // a value GET read from the environment is never written into the file.
     onSave(buildSettingsSaveBody(formState, settings));
   }, [canSave, formState, settings, onSave]);

@@ -95,16 +95,17 @@ At runtime the worker is lenient where the API is strict: a whole number outside
 | `CLAUDE_MEM_MAX_CONCURRENT_AGENTS` | `2` | Most observer processes at once. Codex calls and Claude SDK observers share this pool |
 | `CLAUDE_MEM_SKIP_TOOLS` | `ListMcpResourcesTool,SlashCommand,Skill,TodoWrite,AskUserQuestion` | Tools never sent to the observer. The cheapest way to cut plan usage |
 | `CLAUDE_MEM_EXCLUDED_PROJECTS` | empty | Projects never observed (comma-separated glob patterns) |
+| `CLAUDE_MEM_SUBAGENT_EVENTS` | `all` | Which subagent tool uses are sent to the observer: `all`, `writes` or `none` (see [Plan limits and cost](#plan-limits-and-cost)). File/env only |
 
 `CLAUDE_MEM_MODEL`, `CLAUDE_MEM_TIER_*`, `CLAUDE_MEM_OBSERVER_MAX_CONVERSATION_CHARS` and `CLAUDE_MEM_LLM_TIMEOUT_MS` have no effect on Codex.
 
 ### Who can change what
 
-The settings API is unauthenticated, so what it may write is limited to tuning. It cannot lift the 5-hour cap, change the waiting-observation cap, change the binary or the login, or relax a check. Tuning keys can still raise the cost of each call or the number of calls within that cap: a larger model or higher effort, a smaller batch size (`1` turns batching off), or field compression (an extra call per oversized field). That is another reason to set `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`.
+The settings API is unauthenticated, so what it may write is limited to tuning. It cannot lift the 5-hour cap, change the waiting-observation cap, change which subagent tool uses are observed, change the binary or the login, or relax a check. Tuning keys can still raise the cost of each call or the number of calls within that cap: a larger model or higher effort, a smaller batch size (`1` turns batching off), or field compression (an extra call per oversized field). That is another reason to set `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`.
 
 - **In the viewer** (gear icon → **Advanced**, while Codex is the provider): model (allowlisted models only; a warning appears for `gpt-5.6-sol`, `gpt-6-sol` and `gpt-6-astra`), reasoning effort, verbosity, conversation budget, batch size and timeout. The 5-hour cap and the waiting-observation cap are shown **read-only**. There is no field for the binary path.
 - **In `settings.json` or through the API, not in the viewer:** `CLAUDE_MEM_CODEX_SUMMARY_MODEL`, `CLAUDE_MEM_CODEX_BATCH_MAX_CHARS`, `CLAUDE_MEM_CODEX_BATCH_LINGER_MS`, `CLAUDE_MEM_CODEX_FIELD_COMPRESSION`. These are ordinary settings; they are just not shown in the viewer. Over the API the summary model is limited to the allowlisted models, while the file accepts any id matching the model pattern.
-- **File or environment only:** switching `CLAUDE_MEM_PROVIDER` to or from `codex`, and `CLAUDE_MEM_CODEX_PATH`, `CLAUDE_MEM_CODEX_HOME`, `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`, `CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS`, `CLAUDE_MEM_CODEX_TRANSPORT`, `CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT`, `CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS` and `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION`. Each of these could lift the cap, discard waiting observations (a queue cap of `50`) or let them pile up without limit (`0`), run a different binary or login, or relax a check, so no local program or page served from localhost may set them through the API. The API never writes them, and the viewer never sends them. The API still validates them when a request includes them, and accepts the value already stored.
+- **File or environment only:** switching `CLAUDE_MEM_PROVIDER` to or from `codex`, `CLAUDE_MEM_SUBAGENT_EVENTS`, and `CLAUDE_MEM_CODEX_PATH`, `CLAUDE_MEM_CODEX_HOME`, `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`, `CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS`, `CLAUDE_MEM_CODEX_TRANSPORT`, `CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT`, `CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS` and `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION`. Each of these could lift the cap, discard waiting observations (a queue cap of `50`) or let them pile up without limit (`0`), send every subagent tool use to Codex again, run a different binary or login, or relax a check, so no local program or page served from localhost may set them through the API. The API never writes them, and the viewer never sends them. The API still validates them when a request includes them, and accepts the value already stored.
 
 A model or number that already matches the stored value is accepted back as it is, and the viewer sends only the Codex values you change. So the viewer keeps saving even when the file holds a model outside the allowlist or a number outside its range; such values can only be *set* in the file. When the worker would not use a stored value as written (a number out of range or written as a bare JSON number, an invalid model id, an unknown level), the viewer says so under the field and names the value the worker uses instead. A provider or Codex value that comes from the worker's environment is shown, but the viewer does not copy it into `settings.json` unless you change it.
 
@@ -197,6 +198,20 @@ With the default `gpt-5.6-luna`:
 
 Also keep batching on (the default `4`), effort `low`, field compression off, and exclude projects you do not need with `CLAUDE_MEM_EXCLUDED_PROJECTS`. Two parallel calls of about 15 s each is roughly 8 calls a minute; on Plus the plan limit, not the speed, is what binds.
 
+**Keep subagents to their file writes.** Subagents running in parallel can produce most of the captured tool uses, and most of those are reads and searches. `CLAUDE_MEM_SUBAGENT_EVENTS` decides which of a subagent's tool uses are sent to the observer:
+
+- `all` (default): every one, as before.
+- `writes`: only `Edit`, `Write`, `MultiEdit` and `NotebookEdit`. Everything else a subagent runs is skipped, including its Bash commands, so a `git commit` made by a subagent is not remembered.
+- `none`: none.
+
+Tool uses of the main session are never affected. A skipped tool use never becomes an observation and never costs a Codex call, but it is not lost: its raw input and output are still stored in the tool-use index (the `get_tool_uses` MCP tool finds it), and it is counted in `ai.codex.metrics.subagentEventsSkipped`. A tool use counts as a subagent's when it carries an agent id, which includes transcript watches that have one (such as Grok Bot `agent-transcripts`). The setting is file/env only, an unknown value is logged once and read as `all`, and it applies from the next tool call:
+
+```json
+{
+  "CLAUDE_MEM_SUBAGENT_EVENTS": "writes"
+}
+```
+
 **When the cap is reached** the observer pauses exactly as it does at a real usage limit: new observations are held in the worker's memory, the session-start message says memory is paused and until when, and the worker resumes on its own when the oldest counted call leaves the 5-hour window. The count lives in `~/.claude-mem/codex-usage.json` (timestamps and token counts only, never content), so it survives a worker restart. The cap is re-read on every call: raising it, or setting it to `0`, lifts a pause at the next captured tool call instead of waiting out the old window.
 
 ### How batching works
@@ -229,7 +244,7 @@ The worker logs a warning the first time a session drops tool uses and then once
 `GET /api/health` on the worker port includes, while Codex is the provider:
 
 - `ai.codex.budget`: the cap in force, calls used in the current 5-hour window, calls remaining, when the next call is allowed if the cap is spent, and the token totals of the window.
-- `ai.codex.metrics`: calls by kind since the worker started, observations per call and the batch-size histogram (batching), calls saved by the deferred init and by cutting oversized fields instead of compressing them (`skipped.init`, `skipped.fieldCompression`), token totals, blocked tool attempts, calls the cap refused, and waiting tool uses the waiting-observation cap dropped (`queuedObservationsDropped`).
+- `ai.codex.metrics`: calls by kind since the worker started, observations per call and the batch-size histogram (batching), calls saved by the deferred init and by cutting oversized fields instead of compressing them (`skipped.init`, `skipped.fieldCompression`), token totals, blocked tool attempts, calls the cap refused, waiting tool uses the waiting-observation cap dropped (`queuedObservationsDropped`), and subagent tool uses `CLAUDE_MEM_SUBAGENT_EVENTS` kept from the observer (`subagentEventsSkipped`).
 
 The worker also logs a `Codex observer usage` line every 15 minutes when those counters changed.
 
