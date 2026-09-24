@@ -25,7 +25,7 @@ This page is about Codex as the **observer** that writes your memories. Capturin
 
 ## Prerequisites
 
-1. **The Codex CLI.** The tested range is codex-cli **0.144.4 up to (not including) 0.145**. Check with `codex --version`. An npm install is fine: claude-mem finds the native binary behind the `@openai/codex` wrapper and runs that directly. On macOS the binary inside `/Applications/ChatGPT.app` or `/Applications/Codex.app` is also found. On Windows, the `codex.cmd` shim is refused; point `CLAUDE_MEM_CODEX_PATH` at the native `codex.exe`.
+1. **The Codex CLI.** The tested range is codex-cli **0.156.1 up to (not including) 0.157**, that is 0.156.1 and later 0.156.x releases. Check with `codex --version`. codex-cli 0.144.x is no longer supported: the lockdown now turns off features and sets options that 0.144.x does not know, so an older binary is refused instead of running half locked down. The GPT-6 models also need codex-cli 0.155 or newer (`gpt-6-astra`: 0.153 or newer). An npm install is fine: claude-mem finds the native binary behind the `@openai/codex` wrapper and runs that directly. On macOS the binary inside `/Applications/ChatGPT.app` or `/Applications/Codex.app` is also found. On Windows, the `codex.cmd` shim is refused; point `CLAUDE_MEM_CODEX_PATH` at the native `codex.exe`.
 2. **A ChatGPT login.** Run `codex login` and sign in with the ChatGPT account whose plan should pay for memory. `codex login status` must print `Logged in using ChatGPT`. An API-key login is refused on purpose: it would bill your OpenAI API account instead of your plan.
 3. **A plan that includes Codex.** Plus or higher. A plan without Codex shows up as a setup problem (`codex_plan_not_included`), not as a usage limit.
 
@@ -65,7 +65,7 @@ The worker port is `CLAUDE_MEM_WORKER_PORT` (default `37700 + (uid % 100)`). Loo
 | Setting | Default | Values | What it does |
 |---------|---------|--------|--------------|
 | `CLAUDE_MEM_PROVIDER` | `claude` | `claude`, `gemini`, `openrouter`, `codex` | `codex` turns this provider on |
-| `CLAUDE_MEM_CODEX_MODEL` | `gpt-5.6-luna` | Viewer / API: `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.5`. File / env: any id matching `^[a-z0-9][a-z0-9._-]{0,63}$` | Observer model. `gpt-5.6-luna` has the widest ChatGPT-plan allowance |
+| `CLAUDE_MEM_CODEX_MODEL` | `gpt-5.6-luna` | Viewer / API: `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-5.5`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra`. File / env: any id matching `^[a-z0-9][a-z0-9._-]{0,63}$` | Observer model. See [Plan limits and cost](#plan-limits-and-cost) for each model's allowance. The GPT-6 models need codex-cli 0.155 or newer (`gpt-6-astra`: 0.153) |
 | `CLAUDE_MEM_CODEX_SUMMARY_MODEL` | empty | Same rules as the model; empty means "same as `CLAUDE_MEM_CODEX_MODEL`" | Model for session summaries and Telegram wrap-ups |
 | `CLAUDE_MEM_CODEX_REASONING_EFFORT` | `low` | `low`, `medium`, `high` | Sent with every call, because your own Codex config is ignored |
 | `CLAUDE_MEM_CODEX_VERBOSITY` | `low` | `low`, `medium`, `high` | Reply length; the only output-length setting Codex offers |
@@ -78,7 +78,7 @@ The worker port is `CLAUDE_MEM_WORKER_PORT` (default `37700 + (uid % 100)`). Loo
 | `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H` | `0` | whole number, `0` or more | Local cap on Codex calls in any sliding 5-hour window. `0` means no cap |
 | `CLAUDE_MEM_CODEX_PATH` | empty | Absolute path; a leading `~` is expanded | The codex binary to run. Empty searches `PATH` (and the macOS app bundles). When set it is authoritative: a broken path is an error, never a reason to search elsewhere |
 | `CLAUDE_MEM_CODEX_HOME` | empty | Absolute path; a leading `~` is expanded | `CODEX_HOME` for the observer, i.e. which Codex login it uses. Empty means `$CODEX_HOME`, else `~/.codex`. `auth.json` is used in place, never copied |
-| `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION` | `false` | `true`, `false` | Lets a codex-cli version outside the tested range pass the self-check. The feature and canary probes still run |
+| `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION` | `false` | `true`, `false` | Lets a codex-cli version outside the tested range pass the self-check. The catalog, feature and canary probes still run, and a model's minimum codex-cli version is still enforced |
 | `CLAUDE_MEM_CODEX_TRANSPORT` | `exec` | `exec` | Only `exec` exists. `exec-resume` and `app-server` are reserved names; the worker warns and uses `exec` |
 | `CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT` | `0` | `0`–`50` | Reserved for a later release; no effect yet |
 | `CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS` | `300000` | `60000`–`3600000` | Reserved for a later release; no effect yet |
@@ -101,7 +101,7 @@ At runtime the worker is lenient where the API is strict: a whole number outside
 
 The settings API is unauthenticated, so what it may write is limited to tuning. It cannot lift the 5-hour cap, change the binary or the login, or relax a check. Tuning keys can still raise the cost of each call or the number of calls within that cap: a larger model or higher effort, a smaller batch size (`1` turns batching off), or field compression (an extra call per oversized field). That is another reason to set `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`.
 
-- **In the viewer** (gear icon → **Advanced**, while Codex is the provider): model (allowlisted models only; a warning appears for `gpt-5.6-sol`), reasoning effort, verbosity, conversation budget, batch size and timeout. The 5-hour cap is shown **read-only**. There is no field for the binary path.
+- **In the viewer** (gear icon → **Advanced**, while Codex is the provider): model (allowlisted models only; a warning appears for `gpt-5.6-sol`, `gpt-6-sol` and `gpt-6-astra`), reasoning effort, verbosity, conversation budget, batch size and timeout. The 5-hour cap is shown **read-only**. There is no field for the binary path.
 - **In `settings.json` or through the API, not in the viewer:** `CLAUDE_MEM_CODEX_SUMMARY_MODEL`, `CLAUDE_MEM_CODEX_BATCH_MAX_CHARS`, `CLAUDE_MEM_CODEX_BATCH_LINGER_MS`, `CLAUDE_MEM_CODEX_FIELD_COMPRESSION`. These are ordinary settings; they are just not shown in the viewer. Over the API the summary model is limited to the allowlisted models, while the file accepts any id matching the model pattern.
 - **File or environment only:** switching `CLAUDE_MEM_PROVIDER` to or from `codex`, and `CLAUDE_MEM_CODEX_PATH`, `CLAUDE_MEM_CODEX_HOME`, `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`, `CLAUDE_MEM_CODEX_TRANSPORT`, `CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT`, `CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS` and `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION`. Each of these could lift the cap, run a different binary or login, or relax a check, so no local program or page served from localhost may set them through the API. The API never writes them, and the viewer never sends them. The API still validates them when a request includes them, and accepts the value already stored.
 
@@ -112,29 +112,40 @@ A model or number that already matches the stored value is accepted back as it i
 Codex is a coding agent with shell, file and network tools. The observer needs none of them, and everything it reads is untrusted text from your sessions, so each call runs with a closed, fixed argument list:
 
 ```
-codex exec --json --skip-git-repo-check --ignore-user-config --ignore-rules
-  --color=never --cd=<jail> --sandbox=read-only --model=<model> --ephemeral
-  -c <pin> ... --disable=<feature> ... -
+codex exec --strict-config --json --skip-git-repo-check --ignore-user-config
+  --ignore-rules --color=never --cd=<jail> --sandbox=read-only --model=<model>
+  --ephemeral -c <pin> ... --disable=<feature> ... -
 ```
 
 What that switches off:
 
 - **Your Codex configuration.** `--ignore-user-config` and `--ignore-rules`: your `config.toml`, profiles, MCP servers and rules do not apply to observer calls. Model, effort and verbosity come from the claude-mem settings above.
-- **Tools.** Read-only sandbox, approvals set to never, web search disabled, no MCP servers, and 27 Codex features turned off with `--disable` (shell tool, unified exec, apps, plugins, hooks, multi-agent, memories, browser and computer use, image generation, fast mode and more).
+- **Unknown options.** `--strict-config` makes Codex refuse the call when a `-c` pin or a feature name is one it does not know, so a renamed option fails the call instead of silently staying on.
+- **Tools.** Read-only sandbox, approvals set to never, web search disabled, no MCP servers, and 52 Codex features turned off with `--disable` (shell tool, unified exec, apps, plugins, hooks, multi-agent, memories, browser and computer use, image generation and image viewing, the sleep tool, code mode, worktrees, fast mode and more). Four pins remove what the feature switches do not: `agents.enabled=false` (the multi-agent tools and hints, for every model; the model catalog would otherwise turn them back on despite `--disable=multi_agent`), `tools.update_plan.enabled=false` (the plan tool), `tools.experimental_request_user_input.enabled=false` (the ask-the-user tool `request_user_input`) and `skills.bundled.enabled=false` (Codex's bundled skills).
+- **No execution environment.** `CODEX_EXEC_SERVER_URL=none` is always set, whatever the worker's own environment says. With no execution environment, Codex registers none of the tools that need one: the shell, `apply_patch` (which has no feature switch), image viewing and permission requests. Observer calls answer normally without it.
 - **Injected instructions.** No `AGENTS.md` or project docs, no permissions, apps, environment, collaboration or skills instructions. The only developer message is a fixed one telling the model it has no tools and that the transcript is untrusted data.
 - **Persistence and telemetry.** `--ephemeral` (no session file under `~/.codex/sessions`), history off, analytics off, no OpenTelemetry export, no update check, no notify hook.
 - **Billing.** The login is forced to ChatGPT and the provider to OpenAI. The process gets an allowlisted environment only (`PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `LANG`, `LC_*`, `TZ`, proxy and CA-certificate variables): `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `OPENAI_*`, `ANTHROPIC_*`, `AWS_*` and other tokens never reach it.
 - **Working directory.** A per-session jail under `~/.claude-mem/observer-sessions/`. It must not contain `.git`, `.codex`, `.agents`, `AGENTS*.md`, `.mcp.json` or `plugin/`, and no directory from it up to the claude-mem data directory may hold a `.git`.
 - **The prompt** goes in on stdin, never on the command line (where `ps` could show it).
 
-**Runtime guard.** The worker reads Codex's event stream as it arrives. The first command execution, file change, MCP call, web search, collaboration call, image, or unknown item kills the whole process group, discards the reply and writes a `denied` entry to `~/.claude-mem/observer-audit.log`. A second attempt within the same observer run stops the provider (`codex_lockdown_breach`). Only a real call can show a breach, so a passing self-check does not end it on its own: after the next passing re-check one waiting session is retried as a canary, and the rest resume only once the canary's model answers (see [Troubleshooting](#troubleshooting)). Codex's plan tool (`todo_list`) cannot be removed in `exec`, so it is only logged as `observed`. Output over 8 MB fails closed.
+<Note>
+**`unified_exec` stays on.** codex-cli 0.156 turns `unified_exec` back on after every other setting, so `codex features list` shows it enabled despite `--disable=unified_exec`. It is harmless only because the shell tool is off, which keeps its command tools from being registered. The self-check therefore accepts `unified_exec` only while `shell_tool` is listed as disabled.
+</Note>
 
-**Self-check.** Before the first call, again whenever the binary, your `auth.json`, `CLAUDE_MEM_CODEX_HOME` or the model, effort, verbosity or untested-version settings change, and again once a passing result is an hour old, the worker runs four probes that never call a model and never touch your plan:
+**Runtime guard.** The worker reads Codex's event stream as it arrives. The first command execution, file change, MCP call, web search, collaboration call, or unknown item kills the whole process group, discards the reply and writes a `denied` entry to `~/.claude-mem/observer-audit.log`. A second attempt within the same observer run stops the provider (`codex_lockdown_breach`). Only a real call can show a breach, so a passing self-check does not end it on its own: after the next passing re-check one waiting session is retried as a canary, and the rest resume only once the canary's model answers (see [Troubleshooting](#troubleshooting)). `codex exec` does not report every tool call on its event stream (image viewing, sleep, dynamic tools and some collaboration calls never show up), which is why those tools are removed before the call by the pins, disables and environment above instead of being left to the guard. The plan tool is pinned off; a plan item (`todo_list`) that still shows up is only logged as `observed`. Output over 8 MB fails closed.
 
-1. `codex --version`: the version must be in the tested range.
+**Single answer.** Each call is meant to produce one answer. When a turn produces more than one answer message, only the last one is used (the same message Codex itself treats as the turn's final one), and the turn gets one `observed` `multiple_agent_messages` entry in the audit log with the first 200 characters of each discarded message, plus a warning in the worker log. This is what contains the text of `request_user_input_async`, which the GPT-6 models' catalog entries grant (see the catalog probe below). A single answer is used exactly as before.
+
+**Code-mode notice.** On models whose catalog entry is code-mode only (in the current catalog, every `gpt-5.6-*` and GPT-6 model), each call's event stream begins with an error item saying that Code Mode is unavailable and will fail closed. That is the intended result of the lockdown and is not treated as a failure.
+
+**Self-check.** Before the first call, again whenever the binary, your `auth.json`, `CLAUDE_MEM_CODEX_HOME` or the model, summary model, effort, verbosity or untested-version settings change, and again once a passing result is an hour old, the worker runs five probes that never call a model and never touch your plan:
+
+1. `codex --version`: the version must be in the tested range, and at least the minimum codex-cli version of the observer model and of the summary model (0.155 for `gpt-6-luna` and `gpt-6-sol`, 0.153 for `gpt-6-astra`). `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION` waives the first rule, never the second.
 2. `codex login status`: must report a ChatGPT login.
-3. `codex features list` with the same pins and disables: nothing unexpected may still be on, and every feature claude-mem disables must exist.
-4. `codex debug prompt-input` with a canary: the model's input must be exactly the fixed developer message and the canary, nothing else.
+3. `codex debug models`: the model catalog, from the same Codex home. The observer model and the summary model must be listed, their tool mode must be the default or code-mode only, and their entries may grant no extra tools besides the two claude-mem accepts: `clock` (its sleep tool is off through `--disable=sleep_tool`, and reading the time is only reachable through code mode, which fails closed) and `send_user_message_async` (it adds `request_user_input_async`, which has no switch; it produces only text, with no command, file or network access, and the single-answer rule above contains that text). Tools granted by the catalog have no feature or config switch, so this is the only probe that sees them. Unlike observer calls, this command reads your `config.toml` (see the note under [The self-check failed](#the-self-check-failed)). Codex also refreshes its catalog on its own every few minutes, so a catalog that changes after a passing check is only seen by the next one, at most an hour later.
+4. `codex features list` with the same pins and disables: nothing unexpected may still be on, and every feature claude-mem disables must exist.
+5. `codex debug prompt-input` with a canary, for the observer model: the model's input must be exactly the fixed developer message and the canary, nothing else. The canary shows the input messages, not the tools; the catalog probe covers the tools a model's catalog entry grants.
 
 ### Why there is no "extra arguments" setting
 
@@ -142,26 +153,37 @@ The argument list is built in one place and nothing from settings, the environme
 
 ## Plan limits and cost
 
-Every call is one Codex message, however much it carries. Measured with codex-cli 0.144.4, `gpt-5.6-luna`, effort `low`:
+Every call is one Codex message, however much it carries. Measured with effort `low`:
 
 | Measurement | Result |
 |-------------|--------|
-| Fixed overhead of one locked-down call | about **5.6K input tokens** (5,570; mostly the model's own base instructions) |
-| A realistic observer call (25-turn conversation, 195K characters) | about **56K input tokens** (56,497, only 9% cached), 326 output tokens, **about 15 s** (14.5 s) |
+| A small locked-down call, codex-cli 0.156.1 (observer prompt of about 8.6K characters) | about **7.2K input tokens** on `gpt-5.6-luna` (7,234) and about **7.5K** on `gpt-6-luna` (7,518), mostly the model's own base instructions |
+| A realistic observer call, codex-cli 0.144.4, `gpt-5.6-luna` (25-turn conversation, 195K characters) | about **56K input tokens** (56,497, only 9% cached), 326 output tokens, **about 15 s** (14.5 s). Not re-measured on 0.156.1 |
 | Prompt caching | Unreliable: 0% to 87% on a tiny prompt, and only the static prefix on the realistic one. Do not count on it |
 
 A busy day of Claude Code produced about 2,500 observer requests per 5 hours (measured on an HTTP provider without batching). Batching, the skipped init call, no compression calls and the smaller conversation budget are expected to bring that down to roughly 800–1,500 Codex calls per 5 hours; that range is an estimate, not a measurement.
 
-Codex allowance for `gpt-5.6-luna` per 5 hours, in local messages, as listed for each ChatGPT plan when this page was written. Larger messages count toward the low end, and weekly limits apply on top (their size is not listed). Check your own plan's current limits.
+Codex allowance per 5 hours, in local messages, as listed on the official ChatGPT pricing page when this page was written. Larger messages count toward the low end, and weekly limits apply on top (their size is not listed). Check your own plan's current limits.
 
-| Plan | `gpt-5.6-luna` per 5 hours | What to expect | Suggested `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H` |
-|------|----------------------------|----------------|-----------------------------------------------|
-| Plus / Business | 250–2,000 | Full capture does not fit. Without a cap a busy day can use up the window within hours and block your own Codex work | `150`–`300`, and skip high-volume tools |
-| Pro 5x | 1,250–10,000 | Fine on a typical day, tight on a busy one | About 50–60% of the allowance you actually observe |
-| Pro 20x | 5,000–40,000 | Fits comfortably | A high safety cap, or `0` |
+| Model | Plus | Pro 5x | Pro 20x |
+|-------|------|--------|---------|
+| `gpt-5.6-luna` (default) | 250–2,000 | 1,250–10,000 | 5,000–40,000 |
+| `gpt-6-luna` | 350–3,000 | 1,750–14,000 | 7,000–56,000 |
+| `gpt-6-sol` | 15–150 | 70–700 | 300–3,000 |
+| `gpt-6-astra` | 5–45 | 25–225 | 100–900 |
+
+`gpt-6-luna` allows more than the default on every plan. `gpt-5.6-luna` stays the default because its catalog entry grants no extra tools; the GPT-6 entries grant two, which the lockdown accepts and contains (see the catalog probe under [The lockdown](#the-lockdown)). The GPT-6 models need codex-cli 0.155 or newer (`gpt-6-astra`: 0.153 or newer); the self-check refuses an older binary with `codex_model_needs_newer_cli`.
+
+With the default `gpt-5.6-luna`:
+
+| Plan | What to expect | Suggested `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H` |
+|------|----------------|-----------------------------------------------|
+| Plus / Business | Full capture does not fit. Without a cap a busy day can use up the window within hours and block your own Codex work | `150`–`300`, and skip high-volume tools |
+| Pro 5x | Fine on a typical day, tight on a busy one | About 50–60% of the allowance you actually observe |
+| Pro 20x | Fits comfortably | A high safety cap, or `0` |
 
 <Warning>
-**Keep `gpt-5.6-sol` off the observer.** On Plus it allows only about 10–100 messages per 5 hours. The viewer shows a warning when it is chosen.
+**Keep `gpt-5.6-sol`, `gpt-6-sol` and `gpt-6-astra` off the observer.** On Plus they allow only about 10–100, 15–150 and 5–45 messages per 5 hours. The viewer shows a warning when one of them is chosen.
 </Warning>
 
 **Cut the volume.** Read, Grep and Glob are the highest-volume tools and usually the least interesting to remember. Skipping them is the cheapest lever, and it applies from the next tool call:
@@ -190,7 +212,7 @@ The worker also logs a `Codex observer usage` line every 15 minutes when those c
 - **What is sent to OpenAI:** every captured tool use (tool name, input, output, working directory, time), your prompts, Claude's last reply in each session (for the summary), and the session-start context built from your past observations. It goes through your ChatGPT account and falls under **your ChatGPT data controls**, including whether it may be used to train models. Check them in ChatGPT → Settings → Data controls before turning this on.
 - **What is removed first:** only content inside `<private>…</private>` tags (and claude-mem's own injected context and system-reminder tags). A prompt that is entirely private is not observed at all. There is no secret scanner: if Claude reads a file with a key in it, the observer receives that key. See [Private Tags](/usage/private-tags).
 - **To keep something out:** `CLAUDE_MEM_EXCLUDED_PROJECTS` for whole projects, `CLAUDE_MEM_SKIP_TOOLS` for tools.
-- **On disk:** with `--ephemeral` Codex writes no session file under `~/.codex/sessions`. Whether Codex keeps prompt text in its own local log databases has not been verified. Claude-mem itself stores only call timestamps and token counts in `codex-usage.json`, plus blocked tool attempts in `observer-audit.log`.
+- **On disk:** with `--ephemeral` Codex writes no session file under `~/.codex/sessions`. Whether Codex keeps prompt text in its own local log databases has not been verified. Claude-mem itself stores only call timestamps and token counts in `codex-usage.json`, plus blocked tool attempts in `observer-audit.log` (and, when a call produced more than one answer, the first 200 characters of each discarded one).
 
 ## Troubleshooting
 
@@ -243,16 +265,18 @@ Run `codex login` and sign in with ChatGPT, then check `codex login status`. `co
 
 | Step and code | Meaning | What to do |
 |---------------|---------|------------|
-| `version`, `codex_version_untested` | codex-cli is outside the tested range (0.144.4 up to 0.145) | Install a tested version, or set `"CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION": "true"` to accept it; the other probes still guard the lockdown |
+| `version`, `codex_version_untested` | codex-cli is outside the tested range (0.156.1 up to 0.157). 0.144.x is refused on purpose: it does not know the options the lockdown now sets | Install a tested version, or set `"CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION": "true"` to accept it; the other probes still guard the lockdown |
+| `version`, `codex_model_needs_newer_cli` | The observer model (or the summary model, when the message says so) is newer than the installed codex-cli: the GPT-6 models need 0.155 or newer (`gpt-6-astra`: 0.153). `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION` does not waive this | Update the Codex CLI to a tested version, or select another `CLAUDE_MEM_CODEX_MODEL` (or `CLAUDE_MEM_CODEX_SUMMARY_MODEL`) |
 | `login_status` | No ChatGPT login (see above) | `codex login` |
+| `models_catalog`, "model catalog: …" | The observer model (or the summary model, when the message says so) is not in Codex's model catalog, or its catalog entry grants a tool besides `send_user_message_async` and `clock`, or a tool mode other than the default or code-mode only. Usually a catalog Codex downloaded after this claude-mem release; "is not JSON" or "has no models list" means `codex debug models` changed its output; "sets model_catalog_json" means your `config.toml` replaces the catalog this probe would show (see the note below) | Select another model, or update claude-mem. Run `codex debug models` to see the entry. For `model_catalog_json`, remove it from `config.toml` or give the observer its own `CLAUDE_MEM_CODEX_HOME` |
 | `features_list`, "still enabled: …" | A Codex feature claude-mem does not know how to turn off is on. Usually a newer Codex, sometimes a `[features]` entry in your `config.toml` | Use a tested Codex version, or remove the entry from `config.toml` |
 | `features_list`, "unknown --disable names: …" | Codex renamed or removed a feature claude-mem disables | Use a tested Codex version, or update claude-mem |
 | `prompt_input`, "prompt-input canary: …" | Something besides the observer's own developer message reached the model's input | See the note below |
-| any step, "probe timed out" or "probe could not start" | A probe hung (5–10 s limit), the binary could not run, or the Codex home is relative (`version probe could not start: CLAUDE_MEM_CODEX_HOME must be an absolute path`, or the same for `CODEX_HOME`) | Run `codex --version` by hand and check the binary and `CLAUDE_MEM_CODEX_PATH`. For "must be an absolute path", make `CLAUDE_MEM_CODEX_HOME` (or the worker's `CODEX_HOME`) absolute |
+| any step, "probe timed out" or "probe could not start" | A probe hung (5–15 s limit), the binary could not run, or the Codex home is relative (`version probe could not start: CLAUDE_MEM_CODEX_HOME must be an absolute path`, or the same for `CODEX_HOME`) | Run `codex --version` by hand and check the binary and `CLAUDE_MEM_CODEX_PATH`. For "must be an absolute path", make `CLAUDE_MEM_CODEX_HOME` (or the worker's `CODEX_HOME`) absolute |
 | `fingerprint` or `jail` | The binary cannot be read, or the observer session directory is unsafe | See the jail entry below |
 
 <Note>
-**The canary is stricter than a real call.** `codex features list` and `codex debug prompt-input` load your `~/.codex/config.toml`, while observer calls run with `--ignore-user-config`. Instructions, skills or features enabled in that file can therefore fail the self-check even though a real call would not see them. Remove them from `config.toml` (or give the observer its own `CLAUDE_MEM_CODEX_HOME` and log in there). A global `$CODEX_HOME/AGENTS.md` does not fail the check; it is recorded as a warning, since the canary shows it is not injected.
+**The self-check reads your `config.toml`; observer calls do not.** `codex features list`, `codex debug models` and `codex debug prompt-input` load your `~/.codex/config.toml`, while observer calls run with `--ignore-user-config`. Instructions, skills or features enabled in that file can therefore fail the self-check even though a real call would not see them. For the catalog probe it can also go the other way: `model_catalog_json` makes `codex debug models` show that file instead of the catalog observer calls use, so the self-check refuses it, and `model_provider` or a base-URL setting can point the probe at another catalog source than observer calls use. Remove such entries from `config.toml` (or give the observer its own `CLAUDE_MEM_CODEX_HOME` and log in there). A global `$CODEX_HOME/AGENTS.md` does not fail the check; it is recorded as a warning, since the canary shows it is not injected.
 </Note>
 
 Each self-check failure is also written to `~/.claude-mem/observer-audit.log` as a `codex_self_check:<step>` entry.

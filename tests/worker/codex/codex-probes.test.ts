@@ -10,7 +10,7 @@ import {
   type CodexProbeKind,
 } from '../../../src/services/worker/codex/codex-invocation.js';
 
-const KINDS: CodexProbeKind[] = ['version', 'login_status', 'features_list', 'prompt_input'];
+const KINDS: CodexProbeKind[] = ['version', 'login_status', 'models_catalog', 'features_list', 'prompt_input'];
 const JAIL = '/tmp/claude-mem-test/observer-sessions/codex-selfcheck';
 
 function configTokens(args: string[]): string[] {
@@ -32,6 +32,19 @@ describe('buildCodexProbeArgs: fixed argv', () => {
 
   it('login probe is exactly `login status` (never bare login)', () => {
     expect(buildCodexProbeArgs('login_status', { model: 'gpt-5.6-luna' })).toEqual(['login', 'status']);
+  });
+
+  it('catalog probe is exactly `debug models` (refreshed catalog, never --bundled, no pins)', () => {
+    for (const model of CODEX_MODEL_ALLOWLIST) {
+      expect(buildCodexProbeArgs('models_catalog', { model })).toEqual(['debug', 'models']);
+    }
+  });
+
+  it('no probe carries the exec-only --strict-config', () => {
+    for (const kind of KINDS) {
+      expect(buildCodexProbeArgs(kind, { model: 'gpt-6-luna' })).not.toContain('--strict-config');
+    }
+    expect(() => assertCodexProbeArgvSafe(['debug', 'prompt-input', '--strict-config', CODEX_PROBE_CANARY])).toThrow(CodexArgvViolationError);
   });
 
   it('features probe is `features list` with exactly the exec pins and disables', () => {
@@ -126,9 +139,12 @@ describe('probe subcommand rules', () => {
       ['debug', 'prompt-input', '--ephemeral', 'x'],
       ['debug', 'prompt-input', '--ignore-user-config', 'x'],
       ['debug', 'something-else'],
+      ['debug', 'models', '--bundled'],
+      ['debug', 'models', '-c', 'model="gpt-5.6-luna"'],
       ['exec', '--json', '-'],
       ['--version', 'extra'],
       ['review'],
+      ['fork'],
     ];
     for (const args of bad) {
       expect(() => assertCodexProbeArgvSafe(args)).toThrow(CodexArgvViolationError);

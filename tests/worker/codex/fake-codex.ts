@@ -193,30 +193,41 @@ export interface FakeCodexProbeOptions {
   loginStdout?: string;
   loginStderr?: string;
   loginExit?: number;
+  modelsFixture?: string;
+  modelsExit?: number;
+  modelsStderr?: string;
   featuresFixture?: string;
   promptInputFixture?: string;
   promptInputExit?: number;
   promptInputStderr?: string;
-  /** Probe that sleeps instead of answering (for deadline tests). */
-  hangOn?: 'version' | 'login' | 'features' | 'debug';
+  /** Probe that sleeps instead of answering (for deadline tests); 'debug' is prompt-input. */
+  hangOn?: 'version' | 'login' | 'models' | 'features' | 'debug';
 }
 
-/** Fake codex answering the four self-check probes by argv[1]. */
+/**
+ * Fake codex answering the five self-check probes by argv[1] (and argv[2]
+ * for `debug models` / `debug prompt-input`). Defaults are the codex-cli
+ * 0.156.1 captures.
+ */
 export function createFakeCodexProbes(options: FakeCodexProbeOptions = {}): FakeCodex {
   const { root, recDir, binDir } = makeRoot('claude-mem-fake-codex-probes-');
   const files = {
     version: join(root, 'version.txt'),
     loginOut: join(root, 'login.out'),
     loginErr: join(root, 'login.err'),
+    models: join(root, 'models.json'),
+    modelsErr: join(root, 'models.err'),
     features: join(root, 'features.txt'),
     promptInput: join(root, 'prompt-input.json'),
     promptInputErr: join(root, 'prompt-input.err'),
   };
-  writeFileSync(files.version, options.versionOutput ?? 'codex-cli 0.144.4\n');
+  writeFileSync(files.version, options.versionOutput ?? 'codex-cli 0.156.1\n');
   writeFileSync(files.loginOut, options.loginStdout ?? '');
   writeFileSync(files.loginErr, options.loginStderr ?? 'Logged in using ChatGPT\n');
-  writeFileSync(files.features, readFileSync(options.featuresFixture ?? fixturePath('p0-features-list-locked.txt')));
-  writeFileSync(files.promptInput, readFileSync(options.promptInputFixture ?? fixturePath('p0-prompt-input-locked.json')));
+  writeFileSync(files.models, readFileSync(options.modelsFixture ?? fixturePath('v0156-models-catalog.json')));
+  writeFileSync(files.modelsErr, options.modelsStderr ?? '');
+  writeFileSync(files.features, readFileSync(options.featuresFixture ?? fixturePath('v0156-features-list-locked.txt')));
+  writeFileSync(files.promptInput, readFileSync(options.promptInputFixture ?? fixturePath('v0156-prompt-input-locked.json')));
   writeFileSync(files.promptInputErr, options.promptInputStderr ?? '');
 
   const hang = (kind: string): string[] =>
@@ -234,10 +245,17 @@ export function createFakeCodexProbes(options: FakeCodexProbeOptions = {}): Fake
     `  login)`, ...hang('login').map((l) => `    ${l}`),
     `    cat ${shq(files.loginOut)}`, `    cat ${shq(files.loginErr)} >&2`, `    exit ${options.loginExit ?? 0} ;;`,
     `  features)`, ...hang('features').map((l) => `    ${l}`), `    cat ${shq(files.features)} ;;`,
-    // stdin must be /dev/null ('ignore'): an open pipe would block this cat.
-    `  debug)`, ...hang('debug').map((l) => `    ${l}`),
-    `    cat > "$REC/prompt-input-stdin.txt"`,
-    `    cat ${shq(files.promptInput)}`, `    cat ${shq(files.promptInputErr)} >&2`, `    exit ${options.promptInputExit ?? 0} ;;`,
+    // stdin must be /dev/null ('ignore'): an open pipe would block these cats.
+    `  debug)`,
+    `    case "$2" in`,
+    `      models)`, ...hang('models').map((l) => `        ${l}`),
+    `        cat > "$REC/models-stdin.txt"`,
+    `        cat ${shq(files.models)}`, `        cat ${shq(files.modelsErr)} >&2`, `        exit ${options.modelsExit ?? 0} ;;`,
+    `      prompt-input)`, ...hang('debug').map((l) => `        ${l}`),
+    `        cat > "$REC/prompt-input-stdin.txt"`,
+    `        cat ${shq(files.promptInput)}`, `        cat ${shq(files.promptInputErr)} >&2`, `        exit ${options.promptInputExit ?? 0} ;;`,
+    `      *) printf 'unexpected debug probe\\n' >&2; exit 2 ;;`,
+    `    esac ;;`,
     `  *) printf 'unexpected probe\\n' >&2; exit 2 ;;`,
     'esac',
     'exit 0',

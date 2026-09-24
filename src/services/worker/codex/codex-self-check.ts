@@ -1,37 +1,54 @@
 /**
  * Codex lockdown self-check (plan 2.10, 5/L3).
  *
- * Four model-free probes, run in order and stopping at the first failure:
+ * Five model-free probes, run in order and stopping at the first failure:
  *
  *   1. `codex --version`: parsed and checked against the tested range
- *      (>=0.144.4 <0.145) unless allowUntestedVersion is set. The version is
- *      recorded on the binary fingerprint (find-codex-executable.ts).
+ *      (>=0.156.1 <0.157) unless allowUntestedVersion is set. The version is
+ *      recorded on the binary fingerprint (find-codex-executable.ts). An exec
+ *      model (the observer model, or a different summary model) with a
+ *      CODEX_MODEL_MIN_CLI_VERSION floor above the installed version fails
+ *      here too (model_needs_newer_cli), and allowUntestedVersion does NOT
+ *      bypass that.
  *   2. `codex login status`: stderr must say "Logged in using ChatGPT"
  *      (Phase 0: exit 0, stdout empty). An API-key login is rejected:
  *      billing would silently move to the API.
- *   3. `codex features list <exec pins> <exec disables>`: every enabled
- *      feature must be one of CODEX_EXPECTED_ENABLED_FEATURES or in the
- *      "removed" stage, and every name we --disable must be listed (known).
- *   4. `codex debug prompt-input -c model=... <exec pins> <exec disables>
+ *   3. `codex debug models`: the model catalog, from the same CODEX_HOME.
+ *      Every exec model must be listed, its experimental_supported_tools
+ *      must be within CODEX_ACCEPTED_EXPERIMENTAL_TOOLS and its tool_mode
+ *      absent, null or `code_mode_only`. Catalog-granted tools have no
+ *      feature or config gate, so this is the only probe that sees them.
+ *      Unlike exec, `debug models` loads that home's config.toml (it has no
+ *      --ignore-user-config): `model_catalog_json` there replaces the catalog
+ *      outright, so it fails this step closed; `model_provider` or a base URL
+ *      there can still point it at another catalog source than exec's.
+ *   4. `codex features list <exec pins> <exec disables>`: every enabled
+ *      feature must be one of CODEX_EXPECTED_ENABLED_FEATURES, in the
+ *      "removed" stage, or one of CODEX_FORCED_ENABLED_FEATURES while
+ *      shell_tool is disabled, and every name we --disable must be listed
+ *      (known).
+ *   5. `codex debug prompt-input -c model=... <exec pins> <exec disables>
  *      CLAUDE_MEM_CODEX_CANARY`: the items must be exactly
- *      [developer == CODEX_OBSERVER_DEVELOPER_INSTRUCTIONS, user == canary].
- *      prompt-input and features list load the user's config.toml, so this is
- *      stricter than exec but not byte-for-byte equivalent (plan 2.10).
+ *      [developer == CODEX_OBSERVER_DEVELOPER_INSTRUCTIONS, user == canary],
+ *      rendered for the observer model. prompt-input and features list load
+ *      the user's config.toml, so this is stricter than exec but not
+ *      byte-for-byte equivalent (plan 2.10).
  *
  * Every probe runs with the same env as exec (buildCodexObserverEnv, same
  * CODEX_HOME), stdio ['ignore','pipe','pipe'] (stdin is /dev/null, so no
- * probe can block on it), a 5-10 s deadline and the jail cwd
+ * probe can block on it), a 5-15 s deadline and the jail cwd
  * OBSERVER_SESSIONS_DIR/codex-selfcheck, which passes the same jail check as
  * the exec cwd. All of it is async; nothing here is spawnSync, so boot and
  * ingest are never blocked.
  *
  * States: 'pending' (in flight), 'passed', 'failed'. Results are cached per
- * binary fingerprint (realpath + mtime + size) plus the model / effort /
- * verbosity / allow-untested inputs, the CLAUDE_MEM_CODEX_HOME setting, the
- * EFFECTIVE CODEX_HOME and that home's auth.json (mtime + size), so a replaced
- * binary or a re-login is re-verified; a finished result also expires after
- * CODEX_SELF_CHECK_MAX_AGE_MS so a long-lived worker re-proves the ChatGPT
- * login. Calls are single-flight per key and never reject. "pending"
+ * binary fingerprint (realpath + mtime + size) plus the model / summary model /
+ * effort / verbosity / allow-untested inputs, the CLAUDE_MEM_CODEX_HOME
+ * setting, the EFFECTIVE CODEX_HOME and that home's auth.json (mtime + size),
+ * so a replaced binary or a re-login is re-verified; a finished result also
+ * expires after CODEX_SELF_CHECK_MAX_AGE_MS so a long-lived worker re-proves
+ * the ChatGPT login (and re-reads the model catalog, which is not part of the
+ * key). Calls are single-flight per key and never reject. "pending"
  * and "never run" are NEVER treated as passed: isCodexLockdownPassed() is
  * true only for a finished, passing check of the current fingerprint.
  *
@@ -42,7 +59,7 @@
  * readers use getCodexAuthMethodDescription().
  */
 
-import { existsSync, realpathSync, statSync, type Stats } from 'fs';
+import { existsSync, readFileSync, realpathSync, statSync, type Stats } from 'fs';
 import path from 'path';
 import type { ChildProcess } from 'child_process';
 import { logger } from '../../../utils/logger.js';
@@ -60,8 +77,10 @@ import {
   CODEX_DEFAULT_VERBOSITY,
   CODEX_DISABLED_FEATURES,
   CODEX_EXPECTED_ENABLED_FEATURES,
+  CODEX_FORCED_ENABLED_FEATURES,
   CODEX_OBSERVER_DEVELOPER_INSTRUCTIONS,
   CODEX_PROBE_CANARY,
+  codexModelMinCliVersion,
   type CodexProbeKind,
 } from './codex-invocation.js';
 import { buildCodexObserverEnv, resolveCodexHome, type CodexEnvSettings } from './codex-env.js';
@@ -73,17 +92,24 @@ import type { CodexReasoningEffort, CodexVerbosity } from './codex-transport.js'
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Tested codex-cli range, until re-validated (plan 2.10). */
+/**
+ * Tested codex-cli range, until re-validated (plan 2.10). 0.144.x is refused:
+ * the 0.156 disables and pins are unknown there.
+ */
 export const CODEX_TESTED_VERSION_RANGE = Object.freeze({
-  minInclusive: [0, 144, 4] as const,
-  maxExclusive: [0, 145, 0] as const,
-  label: '>=0.144.4 <0.145',
+  minInclusive: [0, 156, 1] as const,
+  maxExclusive: [0, 157, 0] as const,
+  label: '>=0.156.1 <0.157',
 });
 
-/** Probe deadlines (plan 2.10: 5-10 s). */
+/**
+ * Probe deadlines (plan 2.10: 5-10 s). The catalog probe gets 15 s because it
+ * may refresh the catalog over the network when it is not cached yet.
+ */
 export const CODEX_PROBE_TIMEOUTS_MS: Readonly<Record<CodexProbeKind, number>> = Object.freeze({
   version: 5_000,
   login_status: 10_000,
+  models_catalog: 15_000,
   features_list: 10_000,
   prompt_input: 10_000,
 });
@@ -98,7 +124,49 @@ export const CODEX_PROBE_DRAIN_MS = 2_000;
 /** Jail cwd for the probes. */
 export const CODEX_SELF_CHECK_DIRNAME = 'codex-selfcheck';
 
-const PROBE_ORDER: readonly CodexProbeKind[] = ['version', 'login_status', 'features_list', 'prompt_input'];
+/** The probes, in the order they run (the self-check stops at the first failure). */
+export const CODEX_PROBE_ORDER: readonly CodexProbeKind[] = Object.freeze([
+  'version',
+  'login_status',
+  'models_catalog',
+  'features_list',
+  'prompt_input',
+] as const);
+
+/**
+ * Experimental tools an exec model's catalog entry may grant (0.156.1:
+ * the GPT-6 entries grant exactly these two). They have no feature or config
+ * gate, so they are accepted on these grounds, and anything else fails the
+ * catalog probe closed:
+ *   - `clock`: its clock.sleep tool is off through `--disable=sleep_tool`;
+ *     clock.curr_time only reads the clock (no command, file or network) and
+ *     on code_mode_only models (every current entry granting it) is only
+ *     reachable through code-mode exec, which fails closed with
+ *     code_mode_host disabled.
+ *   - `send_user_message_async`: registers request_user_input_async, which
+ *     has no gate on 0.156.1 and produces only text (no command, file or
+ *     network). exec emits that text as an ordinary agent_message; the
+ *     single-answer rule in codex-jsonl.ts keeps only the turn's LAST
+ *     agent_message as the reply and audits a turn that had more than one.
+ */
+export const CODEX_ACCEPTED_EXPERIMENTAL_TOOLS = Object.freeze(['send_user_message_async', 'clock'] as const);
+
+/** Catalog tool_mode values accepted besides absent / null (Direct). */
+const ACCEPTED_TOOL_MODES: ReadonlySet<string> = new Set(['code_mode_only']);
+
+/** Stage column values of `codex features list` (0.156.1 cli/src/main.rs). */
+const FEATURE_STAGES: ReadonlySet<string> = new Set(['under development', 'experimental', 'stable', 'deprecated', 'removed']);
+
+/** Feature keys, dotted for sub-features (0.156.1 lists `guardianv2.thread_context`). */
+const FEATURE_NAME_RE = /^[a-z0-9_]+(?:\.[a-z0-9_]+)*$/;
+
+/**
+ * A `model_catalog_json` key in config.toml, in any table (a profile included).
+ * `codex debug models` then prints that file instead of the catalog exec loads
+ * (exec runs with --ignore-user-config). Matched on the raw text: a false
+ * match only fails the catalog probe closed.
+ */
+const CATALOG_OVERRIDE_KEY_RE = /^[ \t]*(?:[A-Za-z0-9_.-]+\.)?["']?model_catalog_json["']?[ \t]*=/m;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -151,6 +219,12 @@ export type CodexProbeRunner = (request: CodexProbeRequest) => Promise<CodexProb
 export interface VerifyCodexLockdownOptions {
   /** Observer model the canary is rendered for; defaults to CODEX_DEFAULT_MODEL. */
   model?: string;
+  /**
+   * Model the summary and wrap-up execs run (CLAUDE_MEM_CODEX_SUMMARY_MODEL);
+   * empty or absent means `model`. A different one gets the model/CLI gate
+   * and the catalog check too.
+   */
+  summaryModel?: string;
   effort?: CodexReasoningEffort;
   verbosity?: CodexVerbosity;
   /** CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION (file/env only). */
@@ -217,8 +291,8 @@ export interface CodexFeatureRow {
 
 /**
  * Parse `codex features list` (`<name> <stage words...> <true|false>`).
- * Returns null when any non-blank line does not fit, so a format change fails
- * closed instead of being half-read.
+ * Returns null when any non-blank line does not fit (including a stage outside
+ * the known set), so a format change fails closed instead of being half-read.
  */
 export function parseCodexFeaturesList(output: string): CodexFeatureRow[] | null {
   if (typeof output !== 'string') return null;
@@ -230,8 +304,10 @@ export function parseCodexFeaturesList(output: string): CodexFeatureRow[] | null
     if (tokens.length < 3) return null;
     const name = tokens[0];
     const flag = tokens[tokens.length - 1];
-    if (!/^[a-z0-9_]+$/.test(name) || (flag !== 'true' && flag !== 'false')) return null;
-    rows.push({ name, stage: tokens.slice(1, -1).join(' '), enabled: flag === 'true' });
+    if (!FEATURE_NAME_RE.test(name) || (flag !== 'true' && flag !== 'false')) return null;
+    const stage = tokens.slice(1, -1).join(' ');
+    if (!FEATURE_STAGES.has(stage)) return null;
+    rows.push({ name, stage, enabled: flag === 'true' });
   }
   return rows.length > 0 ? rows : null;
 }
@@ -240,19 +316,82 @@ export type CodexFeaturesEvaluation =
   | { ok: true }
   | { ok: false; reason: string; unexpectedEnabled: string[]; unknownDisabled: string[] };
 
-/** Only CODEX_EXPECTED_ENABLED_FEATURES or "removed"-stage flags may be on; every disable must be known. */
+/**
+ * Only CODEX_EXPECTED_ENABLED_FEATURES or "removed"-stage flags may be on, plus
+ * CODEX_FORCED_ENABLED_FEATURES while a shell_tool row exists and is disabled;
+ * every disable must be known.
+ */
 export function evaluateCodexFeatures(rows: readonly CodexFeatureRow[]): CodexFeaturesEvaluation {
   const expected = new Set<string>(CODEX_EXPECTED_ENABLED_FEATURES);
-  const unexpectedEnabled = rows
-    .filter((row) => row.enabled && row.stage !== 'removed' && !expected.has(row.name))
+  const forced = new Set<string>(CODEX_FORCED_ENABLED_FEATURES);
+  const shellToolRows = rows.filter((row) => row.name === 'shell_tool');
+  const shellToolDisabled = shellToolRows.length > 0 && shellToolRows.every((row) => !row.enabled);
+  const enabled = rows.filter((row) => row.enabled && row.stage !== 'removed' && !expected.has(row.name));
+  const unexpectedEnabled = enabled
+    .filter((row) => !(forced.has(row.name) && shellToolDisabled))
     .map((row) => row.name);
+  const forcedWithShell = unexpectedEnabled.filter((name) => forced.has(name));
   const listed = new Set(rows.map((row) => row.name));
   const unknownDisabled = CODEX_DISABLED_FEATURES.filter((name) => !listed.has(name));
   if (unexpectedEnabled.length === 0 && unknownDisabled.length === 0) return { ok: true };
   const parts: string[] = [];
   if (unexpectedEnabled.length > 0) parts.push(`still enabled: ${unexpectedEnabled.join(', ')}`);
+  if (forcedWithShell.length > 0) {
+    parts.push(
+      `${forcedWithShell.join(', ')} cannot be turned off and is tolerated only while shell_tool is disabled, `
+      + `but shell_tool is ${shellToolRows.length === 0 ? 'not listed' : 'enabled'}`,
+    );
+  }
   if (unknownDisabled.length > 0) parts.push(`unknown --disable names: ${unknownDisabled.join(', ')}`);
   return { ok: false, reason: parts.join('; '), unexpectedEnabled, unknownDisabled };
+}
+
+export type CodexModelCatalogEvaluation = { ok: true } | { ok: false; reason: string };
+
+/** A catalog-controlled value, bounded for a failure reason. */
+function describeCatalogValue(value: unknown): string {
+  const text = JSON.stringify(value) ?? String(value);
+  return text.length > 60 ? `${text.slice(0, 60)}...` : text;
+}
+
+/**
+ * `codex debug models` prints `{"models":[...]}`. Fails closed when the output
+ * is not that shape, when `model` has no entry, when an entry for it grants an
+ * experimental tool outside CODEX_ACCEPTED_EXPERIMENTAL_TOOLS, or when its
+ * tool_mode is anything but absent, null or `code_mode_only`.
+ */
+export function evaluateCodexModelCatalog(output: string, model: string): CodexModelCatalogEvaluation {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(typeof output === 'string' ? output.trim() : '');
+  } catch {
+    // [ANTI-PATTERN IGNORED]: unparseable probe output is the documented fail-closed result.
+    return { ok: false, reason: 'debug models output is not JSON' };
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.models)) {
+    return { ok: false, reason: 'debug models output has no models list' };
+  }
+  const entries = parsed.models.filter((entry): entry is Record<string, unknown> => isRecord(entry) && entry.slug === model);
+  if (entries.length === 0) return { ok: false, reason: `${model} is not in the Codex model catalog` };
+
+  const accepted = new Set<string>(CODEX_ACCEPTED_EXPERIMENTAL_TOOLS);
+  for (const entry of entries) {
+    const tools = entry.experimental_supported_tools;
+    if (tools !== undefined && tools !== null) {
+      if (!Array.isArray(tools)) {
+        return { ok: false, reason: `${model}: experimental_supported_tools is not a list` };
+      }
+      const extra = tools.filter((tool) => typeof tool !== 'string' || !accepted.has(tool));
+      if (extra.length > 0) {
+        return { ok: false, reason: `${model}: the catalog grants experimental tools outside the accepted set: ${extra.map(describeCatalogValue).join(', ')}` };
+      }
+    }
+    const toolMode = entry.tool_mode;
+    if (toolMode !== undefined && toolMode !== null && !(typeof toolMode === 'string' && ACCEPTED_TOOL_MODES.has(toolMode))) {
+      return { ok: false, reason: `${model}: unexpected tool_mode ${describeCatalogValue(toolMode)}` };
+    }
+  }
+  return { ok: true };
 }
 
 export type CodexPromptInputEvaluation = { ok: true } | { ok: false; reason: string };
@@ -281,7 +420,11 @@ function describeItem(item: unknown): string {
 /**
  * The canary must yield exactly [developer == CODEX_OBSERVER_DEVELOPER_INSTRUCTIONS,
  * user == CODEX_PROBE_CANARY]. Any extra item (skills, permissions, AGENTS.md,
- * environment context, multi-agent hints) is a lockdown failure.
+ * environment context, multi-agent hints) is a lockdown failure. Extra fields
+ * on an item (0.156.1 adds an id and metadata) are ignored.
+ *
+ * The canary shows input items only, never the tool list; catalog-granted
+ * tools are covered by the models_catalog probe (evaluateCodexModelCatalog).
  */
 export function evaluateCodexPromptInput(output: string): CodexPromptInputEvaluation {
   let parsed: unknown;
@@ -456,8 +599,14 @@ let lastResult: CodexLockdownResult | null = null;
  * How long a finished result is reused. The key already changes when the
  * binary, the inputs or the auth file change, but a long-lived worker should
  * still re-verify the login periodically: the probes are model-free and cheap
- * (four short subprocesses), so a stale "ChatGPT login" verdict is never worth
+ * (five short subprocesses), so a stale "ChatGPT login" verdict is never worth
  * more than an hour.
+ *
+ * The model catalog is deliberately not in the key. codex refreshes it on its
+ * own (a 300 s cache TTL, or a new models etag on a response), so a catalog
+ * that changes after a pass is only seen by the next check, at most this long
+ * later. Keying on models_cache.json would re-run the check every few minutes
+ * (codex rewrites it on each refresh) and hold the observer meanwhile.
  */
 export const CODEX_SELF_CHECK_MAX_AGE_MS = 60 * 60_000;
 
@@ -473,6 +622,7 @@ function freshCompleted(key: string, nowMs: number): CodexLockdownResult | null 
 
 interface ResolvedOptions {
   model: string;
+  summaryModel: string;
   effort: CodexReasoningEffort;
   verbosity: CodexVerbosity;
   allowUntestedVersion: boolean;
@@ -480,13 +630,25 @@ interface ResolvedOptions {
 }
 
 function resolveOptions(options: VerifyCodexLockdownOptions): ResolvedOptions {
+  const model = options.model ?? CODEX_DEFAULT_MODEL;
   return {
-    model: options.model ?? CODEX_DEFAULT_MODEL,
+    model,
+    summaryModel: options.summaryModel || model,
     effort: options.effort ?? CODEX_DEFAULT_REASONING_EFFORT,
     verbosity: options.verbosity ?? CODEX_DEFAULT_VERBOSITY,
     allowUntestedVersion: options.allowUntestedVersion === true,
     envSettings: options.envSettings ?? {},
   };
+}
+
+/** Every model an exec may run: the observer model, then a different summary model. */
+function execModels(resolved: ResolvedOptions): string[] {
+  return resolved.summaryModel === resolved.model ? [resolved.model] : [resolved.model, resolved.summaryModel];
+}
+
+/** `model` as a failure message names it. */
+function describeExecModel(resolved: ResolvedOptions, model: string): string {
+  return model === resolved.model ? model : `summary model ${model}`;
 }
 
 interface Fingerprint {
@@ -538,6 +700,7 @@ function cacheKeyOf(fingerprint: Fingerprint, options: ResolvedOptions): string 
     fingerprint.mtimeMs,
     fingerprint.size,
     options.model,
+    options.summaryModel,
     options.effort,
     options.verbosity,
     options.allowUntestedVersion ? 'allow-untested' : 'tested-only',
@@ -696,7 +859,7 @@ async function runSelfCheck(
     return runner({ kind, binaryPath: fingerprint.realpath, args, cwd: jailDir, timeoutMs });
   };
 
-  for (const kind of PROBE_ORDER) {
+  for (const kind of CODEX_PROBE_ORDER) {
     const response = await probe(kind);
     const failure = probeTransportFailure(kind, response);
     if (failure) return finish({ step: kind, error: failure });
@@ -710,6 +873,21 @@ async function runSelfCheck(
         }
         version = parsed.raw;
         recordCodexBinaryVersion(fingerprint, parsed.raw);
+        // Before the tested-range check and never waived by allowUntestedVersion:
+        // an older CLI does not know the model and would send it with generic
+        // metadata. major.minor.patch only (a prerelease of the floor passes).
+        for (const model of execModels(resolved)) {
+          const minimum = codexModelMinCliVersion(model);
+          if (minimum && compareTriple([parsed.major, parsed.minor, parsed.patch], minimum) < 0) {
+            return finish({
+              step: kind,
+              error: conditionError(
+                'model_needs_newer_cli',
+                `${describeExecModel(resolved, model)} needs codex-cli ${minimum.join('.')} or newer (found ${parsed.raw})`,
+              ),
+            });
+          }
+        }
         if (!isCodexVersionTested(parsed)) {
           if (!resolved.allowUntestedVersion) {
             return finish({
@@ -725,6 +903,21 @@ async function runSelfCheck(
         const login = evaluateCodexLoginStatus(response);
         authMethod = login.authMethod;
         if (!login.ok) return finish({ step: kind, error: login.error });
+        break;
+      }
+      case 'models_catalog': {
+        if (response.exitCode !== 0) return finish({ step: kind, error: nonZeroExitFailure(kind, response) });
+        const override = catalogOverrideProblem(resolved.envSettings);
+        if (override) return finish({ step: kind, error: conditionError('self_check_failed', `model catalog: ${override}`) });
+        // Summary and wrap-up execs run the summary model, so it is checked
+        // against the same output.
+        for (const model of execModels(resolved)) {
+          const evaluation = evaluateCodexModelCatalog(response.stdout, model);
+          if (!evaluation.ok) {
+            const subject = model === resolved.model ? '' : 'summary model ';
+            return finish({ step: kind, error: conditionError('self_check_failed', `model catalog: ${subject}${evaluation.reason}`) });
+          }
+        }
         break;
       }
       case 'features_list': {
@@ -761,6 +954,32 @@ async function runSelfCheck(
   }
 
   return finish(null);
+}
+
+/**
+ * Why `codex debug models` cannot stand for exec's catalog, or null. The probe
+ * loads CODEX_HOME/config.toml (it has no --ignore-user-config) and
+ * `model_catalog_json` there replaces the catalog outright, so a pass would
+ * prove nothing about the one exec uses.
+ */
+function catalogOverrideProblem(envSettings: CodexEnvSettings): string | null {
+  let configPath: string;
+  try {
+    configPath = path.join(resolveCodexHome(envSettings, sanitizeEnv(process.env)), 'config.toml');
+  } catch (error: unknown) {
+    return `CODEX_HOME could not be resolved to read its config.toml: ${errorMessage(error)}`;
+  }
+  let text: string;
+  try {
+    text = readFileSync(configPath, 'utf8');
+  } catch {
+    // [ANTI-PATTERN IGNORED]: no config.toml is the ordinary case, and one this
+    // user cannot read, codex (run as the same user) cannot read either.
+    return null;
+  }
+  return CATALOG_OVERRIDE_KEY_RE.test(text)
+    ? '$CODEX_HOME/config.toml sets model_catalog_json, so `codex debug models` does not show the catalog observer calls use'
+    : null;
 }
 
 function probeTransportFailure(kind: CodexProbeKind, response: CodexProbeResponse): ClassifiedProviderError | null {

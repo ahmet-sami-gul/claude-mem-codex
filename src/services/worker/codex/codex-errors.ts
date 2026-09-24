@@ -83,6 +83,7 @@ export type CodexRunnerCondition =
   | 'spawn_failed'
   | 'lockdown_breach'
   | 'version_untested'
+  | 'model_needs_newer_cli'
   | 'self_check_failed'
   | 'api_key_login'
   | 'stream_truncated'
@@ -432,6 +433,12 @@ const CONDITION_RULES: Record<CodexRunnerCondition, ConditionRule> = {
     label: 'Codex CLI version is outside the tested range',
     action: 'Install a tested Codex CLI version or set CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION=true.',
   },
+  model_needs_newer_cli: {
+    kind: 'setup_required',
+    code: 'codex_model_needs_newer_cli',
+    label: 'The selected Codex model needs a newer Codex CLI',
+    action: 'Update the Codex CLI to a tested version, or select another CLAUDE_MEM_CODEX_MODEL (or CLAUDE_MEM_CODEX_SUMMARY_MODEL).',
+  },
   self_check_failed: { kind: 'setup_required', code: 'codex_self_check_failed', label: 'Codex lockdown self-check failed', action: ACTION_INVOCATION },
   api_key_login: { kind: 'setup_required', code: 'codex_api_key_login', label: 'Codex is logged in with an API key, not ChatGPT', action: ACTION_LOGIN },
   stream_truncated: {
@@ -452,6 +459,7 @@ const DEFINITIVE_CONDITIONS: ReadonlySet<CodexRunnerCondition> = new Set([
   'spawn_failed',
   'lockdown_breach',
   'version_untested',
+  'model_needs_newer_cli',
   'self_check_failed',
   'api_key_login',
   'stream_truncated',

@@ -54,8 +54,9 @@ const T0 = Date.parse('2026-09-23T09:00:00.000Z');
 const HOUR = 60 * 60_000;
 const OPEN = '<observed_from_primary_session>';
 
-const FEATURES = readFileSync(fixturePath('p0-features-list-locked.txt'), 'utf8');
-const PROMPT_INPUT = readFileSync(fixturePath('p0-prompt-input-locked.json'), 'utf8');
+const FEATURES = readFileSync(fixturePath('v0156-features-list-locked.txt'), 'utf8');
+const PROMPT_INPUT = readFileSync(fixturePath('v0156-prompt-input-locked.json'), 'utf8');
+const MODELS = readFileSync(fixturePath('v0156-models-catalog.json'), 'utf8');
 
 const OBSERVATION_REPLY = '<observation><type>discovery</type><title>t</title><narrative>n</narrative><facts></facts><concepts></concepts><files_read></files_read><files_modified></files_modified></observation>';
 const SUMMARY_REPLY = '<summary><request>r</request><investigated>i</investigated><learned>l</learned><completed>c</completed><next_steps>n</next_steps><notes></notes></summary>';
@@ -139,8 +140,9 @@ function defaultReply(call: SpawnedCall): TurnResult {
 
 function probeRunner(): (request: CodexProbeRequest) => Promise<CodexProbeResponse> {
   const responses: Record<CodexProbeRequest['kind'], CodexProbeResponse> = {
-    version: { exitCode: 0, signal: null, stdout: 'codex-cli 0.144.4\n', stderr: '', timedOut: false },
+    version: { exitCode: 0, signal: null, stdout: 'codex-cli 0.156.1\n', stderr: '', timedOut: false },
     login_status: { exitCode: 0, signal: null, stdout: '', stderr: 'Logged in using ChatGPT\n', timedOut: false },
+    models_catalog: { exitCode: 0, signal: null, stdout: MODELS, stderr: '', timedOut: false },
     features_list: { exitCode: 0, signal: null, stdout: FEATURES, stderr: '', timedOut: false },
     prompt_input: { exitCode: 0, signal: null, stdout: PROMPT_INPUT, stderr: '', timedOut: false },
   };

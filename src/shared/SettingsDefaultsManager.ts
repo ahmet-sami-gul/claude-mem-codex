@@ -216,7 +216,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_OPENROUTER_APP_NAME: 'claude-mem',  // App name for OpenRouter analytics
     CLAUDE_MEM_CODEX_PATH: '',  // Absolute native codex binary; empty = resolve from PATH (file/env only)
     CLAUDE_MEM_CODEX_HOME: '',  // CODEX_HOME for the observer child; empty = $CODEX_HOME or ~/.codex (file/env only)
-    CLAUDE_MEM_CODEX_MODEL: 'gpt-5.6-luna',  // Widest ChatGPT-plan allowance of the allowlisted models
+    CLAUDE_MEM_CODEX_MODEL: 'gpt-5.6-luna',  // Default observer model; per-model plan allowances are in the codex provider docs
     CLAUDE_MEM_CODEX_SUMMARY_MODEL: '',  // Empty = same as CLAUDE_MEM_CODEX_MODEL (never the shared TIER aliases)
     CLAUDE_MEM_CODEX_REASONING_EFFORT: 'low',  // Passed explicitly: --ignore-user-config drops the user's own setting
     CLAUDE_MEM_CODEX_VERBOSITY: 'low',  // The only output-length lever codex exposes

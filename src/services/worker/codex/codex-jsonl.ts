@@ -8,25 +8,45 @@
  *   {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"..."}}
  *   {"type":"turn.completed","usage":{"input_tokens":N,"cached_input_tokens":N,
  *     "output_tokens":N,"reasoning_output_tokens":N}}
+ * codex-cli 0.156.1 (canary) adds one item.completed `error` right after
+ * thread.started on code_mode_only models ("Code Mode is unavailable because
+ * code-mode host is disabled. Code mode will fail closed ...") and
+ * `cache_write_input_tokens` to the usage.
  *
  * Event handling:
  *   thread.started            -> thread id, logged only (never persisted)
  *   turn.started              -> ignored
  *   item.* agent_message      -> allowed; text collected from item.completed only
  *   item.* reasoning          -> allowed, ignored
- *   item.* error              -> info only (upstream: non-fatal notice; not verified)
- *   item.* todo_list          -> audit only, NOT fatal (update_plan cannot be
- *                                removed in exec and base instructions invite it)
+ *   item.* error              -> info only, never fatal. Expected once per session
+ *                                on code_mode_only models (the code-mode
+ *                                fail-closed notice above)
+ *   item.* todo_list          -> audit only, NOT fatal (update_plan is pinned off
+ *                                on 0.156.1, so one means config drift)
  *   item.* anything else      -> TOOL ATTEMPT (command_execution, file_change,
  *                                mcp_tool_call, web_search, collab_tool_call,
- *                                image/view_image, unknown or missing type)
+ *                                unknown or missing type)
  *   turn.completed            -> success marker + usage
  *   turn.failed               -> failure message
  *   error "Reconnecting... n/m" -> info only
  *   error (other)             -> failure candidate; fatal only together with
  *                                turn.failed or exit code 1 (decided by the caller)
  *   non-JSON line / unknown event / unknown field -> counted and ignored
- *                                (0.155 adds cache_write_input_tokens, for example)
+ *                                (cache_write_input_tokens, a subset of
+ *                                input_tokens, is one such field)
+ *
+ * The guard only sees what exec emits: exec drops some tool item kinds from the
+ * JSONL entirely (view_image, sleep, dynamic tools, some collab calls such as
+ * send_message / followup_task / interrupt_agent / list_agents). Those tools
+ * are removed before the call instead, by the pins and disables
+ * (codex-invocation.ts) and CODEX_EXEC_SERVER_URL=none (codex-env.ts), never
+ * left to this guard.
+ *
+ * Single-answer rule: the reply content is the LAST completed agent_message,
+ * the same message exec itself treats as the turn's final one. A turn with more
+ * than one (e.g. request_user_input_async text, which exec also emits as an
+ * agent_message) keeps only the last; the count is exposed so the runner can
+ * audit it. With one message the content is that message, unchanged.
  *
  * Usage semantics: `turn.completed.usage` is the THREAD CUMULATIVE total. For a
  * single-turn `--ephemeral` exec it equals the per-call usage. A future resume
@@ -86,7 +106,9 @@ export interface CodexJsonlSummary {
   threadId: string | null;
   /** agent_message texts from item.completed, in order. */
   agentMessages: string[];
-  /** agentMessages joined with '\n'. */
+  /** agentMessages.length; above 1 the runner audits the turn (single-answer rule). */
+  agentMessageCount: number;
+  /** The last agent_message text ('' when there is none). */
   content: string;
   usage: CodexUsage | null;
   turnCompleted: boolean;
@@ -402,7 +424,8 @@ export class CodexJsonlParser {
     return {
       threadId: this.threadId,
       agentMessages: [...this.agentMessages],
-      content: this.agentMessages.join('\n'),
+      agentMessageCount: this.agentMessages.length,
+      content: this.agentMessages.length > 0 ? this.agentMessages[this.agentMessages.length - 1] : '',
       usage: this.usage ? { ...this.usage } : null,
       turnCompleted: this.turnCompleted,
       turnFailedMessage: this.turnFailedMessage,

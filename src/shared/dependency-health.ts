@@ -31,10 +31,10 @@ export const CLAUDE_CLI_SETUP_REMEDIATION =
  * worker quietly re-checks, mirroring CLAUDE_CLI_SETUP_RECHECK_COOLDOWN_MS.
  *
  * One window covers both `setup_required` and `auth_required`: the re-check for
- * either is the model-free self-check (`codex --version`, `features list`,
- * `login status`), which costs nothing against the user's plan, so there is no
- * reason to make a logged-out user wait longer than a user who has not
- * installed the CLI yet.
+ * either is the model-free self-check (`codex --version`, `login status`,
+ * `debug models`, `features list`, `debug prompt-input`), which costs nothing
+ * against the user's plan, so there is no reason to make a logged-out user
+ * wait longer than a user who has not installed the CLI yet.
  */
 export const CODEX_CLI_SETUP_RECHECK_COOLDOWN_MS = 30_000;
 

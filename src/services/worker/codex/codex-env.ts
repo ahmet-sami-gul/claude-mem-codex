@@ -25,7 +25,14 @@
  * Added: CODEX_HOME (CLAUDE_MEM_CODEX_HOME || $CODEX_HOME || ~/.codex; the
  * user's real home, auth.json is never copied because the refresh token
  * rotates), TERM=dumb, NO_COLOR=1, RUST_LOG=error, CLAUDE_MEM_INTERNAL=1 (makes
- * claude-mem's own hooks ignore observer runs).
+ * claude-mem's own hooks ignore observer runs), CODEX_EXEC_SERVER_URL=none.
+ *
+ * CODEX_EXEC_SERVER_URL=none is always forced, never inherited: with no
+ * execution environment, exec (codex-cli 0.156) registers none of the
+ * environment-bound tools: shell, apply_patch (which has no feature gate and
+ * would otherwise be registered for every catalog model), view_image and
+ * request_permissions. The 0.156.1 canary verified that exec still answers
+ * without one. It applies to exec and the self-check probes alike.
  *
  * Explicitly dropped even if a future edit widened the allowlist:
  * CODEX_API_KEY / CODEX_ACCESS_TOKEN (exec prefers them over the ChatGPT login,
@@ -117,12 +124,13 @@ export const CODEX_ENV_DROPPED_PREFIXES: readonly string[] = [
   'CODEX_MANAGED_BY_',
 ];
 
-/** Values forced onto every Codex child. */
+/** Values forced onto every Codex child (an inherited value is overwritten). */
 export const CODEX_ENV_FORCED: Readonly<Record<string, string>> = Object.freeze({
   TERM: 'dumb',
   NO_COLOR: '1',
   RUST_LOG: 'error',
   CLAUDE_MEM_INTERNAL: '1',
+  CODEX_EXEC_SERVER_URL: 'none',
 });
 
 /** Used only when the base env has no PATH at all. */

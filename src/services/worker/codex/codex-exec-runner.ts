@@ -32,11 +32,16 @@
  *      events, which would blind the L4 guard, so it SIGKILLs the group and
  *      the turn fails closed (setup_required `codex_stream_truncated`).
  *   8. Runtime tool guard (L4): the first forbidden item (command_execution,
- *      file_change, mcp_tool_call, web_search, collab_tool_call, image,
- *      unknown) SIGKILLs the whole process group, writes a 'denied' audit
- *      entry with provider 'codex', logs SECURITY and discards the turn text.
- *      `todo_list` (update_plan cannot be removed in exec) is audited as
- *      'observed' once per item and the process keeps running.
+ *      file_change, mcp_tool_call, web_search, collab_tool_call, unknown)
+ *      SIGKILLs the whole process group, writes a 'denied' audit entry with
+ *      provider 'codex', logs SECURITY and discards the turn text. Tool kinds
+ *      exec never emits (view_image, sleep, dynamic tools, some collab calls)
+ *      are removed before the call by the pins, disables and env instead.
+ *      `todo_list` (update_plan is pinned off on 0.156.1) is audited as
+ *      'observed' once per item and the process keeps running. A turn with
+ *      more than one agent_message keeps only the last one (single-answer
+ *      rule, codex-jsonl.ts) and is audited once as 'observed'
+ *      (`multiple_agent_messages`) with a warning.
  *   9. Deadline / session abort: SIGINT to -pgid (exec turns it into a turn
  *      interrupt), SIGKILL to -pgid after the grace period (5 s). A timeout is
  *      transient `codex_timeout`; an abort is re-thrown as AbortError. Any
@@ -74,6 +79,7 @@ import { buildCodexObserverEnv, resolveCodexHome, type CodexEnvSettings } from '
 import {
   appendCodexStderrTail,
   CodexJsonlParser,
+  safeCodexLabel,
   stripCodexStdinNotice,
   type CodexJsonlEvent,
 } from './codex-jsonl.js';
@@ -113,6 +119,9 @@ export const CODEX_MAX_TIMEOUT_MS = 600_000;
 
 /** A second guard kill in the same session escalates to setup_required codex_lockdown_breach. */
 export const CODEX_LOCKDOWN_BREACH_THRESHOLD = 2;
+
+/** Characters kept per discarded agent_message in the `multiple_agent_messages` audit entry. */
+export const CODEX_DISCARDED_MESSAGE_EXCERPT_CHARS = 200;
 
 /** Entries in a jail directory that Codex would read from its cwd (plan 2.4). */
 export const CODEX_JAIL_FORBIDDEN_ENTRIES: ReadonlySet<string> = new Set([
@@ -749,6 +758,32 @@ export class ExecTransport implements CodexTransport {
           });
         }
 
+        if (!toolAttempt && summary.agentMessageCount > 1) {
+          // Single-answer rule: only the last message became the reply. The
+          // earlier ones (e.g. request_user_input_async text, which exec emits
+          // as an ordinary agent_message) are kept here, bounded, for review.
+          recordObserverToolAttempt({
+            source: 'Observer',
+            provider: 'codex',
+            sessionDbId: ctx.sessionDbId,
+            contentSessionId: ctx.contentSessionId,
+            project: ctx.project,
+            tool_name: 'multiple_agent_messages',
+            tool_input: {
+              agent_messages: summary.agentMessageCount,
+              discarded: summary.agentMessages
+                .slice(0, -1)
+                .map((text) => safeCodexLabel(text, CODEX_DISCARDED_MESSAGE_EXCERPT_CHARS)),
+            },
+            result: 'observed',
+          });
+          logger.warn('SDK', 'Codex turn produced more than one agent_message; only the last one is the reply', {
+            sessionId: ctx.sessionDbId,
+            purpose: ctx.purpose,
+            agentMessages: summary.agentMessageCount,
+          });
+        }
+
         logger.info('SDK', 'Codex exec finished', {
           sessionId: ctx.sessionDbId,
           purpose: ctx.purpose,
@@ -763,7 +798,7 @@ export class ExecTransport implements CodexTransport {
           cachedInputTokens: summary.usage?.cached,
           outputTokens: summary.usage?.output,
           reasoningTokens: summary.usage?.reasoning,
-          agentMessages: summary.agentMessages.length,
+          agentMessages: summary.agentMessageCount,
           nonFatalErrors: summary.nonFatalErrors.length,
           malformedLines: summary.malformedLines,
           unknownEvents: summary.unknownEvents,

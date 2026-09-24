@@ -50,8 +50,9 @@ export interface ObserverToolAttempt {
   tool_input: unknown;
   /**
    * 'observed' is audit-only: the codex runner records `todo_list`
-   * (update_plan) items this way because exec cannot remove that tool and the
-   * process is deliberately NOT killed for it (plan 5, L4).
+   * (update_plan) items and turns with more than one agent_message
+   * (`multiple_agent_messages`) this way; the process is deliberately NOT
+   * killed for either (plan 5, L4).
    */
   result: 'allowed' | 'denied' | 'error' | 'observed';
   error_message?: string;

@@ -365,7 +365,7 @@ export interface CodexProviderOptions {
    * Runs (or joins) the lockdown self-check and resolves with its verdict — the
    * awaited counterpart of `startSelfCheck`, used by the route's codex gate via
    * `verifyLockdown`. Defaults to `verifyCodexLockdown`, which is single-flight,
-   * never rejects and only runs the four model-free probes. Test seam.
+   * never rejects and only runs the five model-free probes. Test seam.
    */
   runSelfCheck?: (binaryPath: string, options: VerifyCodexLockdownOptions) => Promise<CodexLockdownResult>;
 }
@@ -691,10 +691,16 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
     return resolution;
   }
 
-  /** The self-check inputs; must match between the status read and the run, or the cache key differs. */
+  /**
+   * The self-check inputs; must match between the status read and the run, or
+   * the cache key differs. The summary model is one of them: summary and
+   * wrap-up execs run it, so the model/CLI gate and the catalog check cover it
+   * too.
+   */
   private selfCheckOptions(config: CodexConfig): VerifyCodexLockdownOptions {
     return {
       model: config.model,
+      summaryModel: this.resolveSummaryModel(config),
       effort: config.effort,
       verbosity: config.verbosity,
       allowUntestedVersion: config.allowUntestedVersion,
@@ -744,7 +750,7 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
    * Start (or join) the lockdown self-check for the configured binary and
    * resolve with its verdict; null when there is no binary to check. `force`
    * re-runs a check whose failed or passed verdict is still cached — the
-   * gate's re-check after a setup/login backoff expires. Model-free: the four
+   * gate's re-check after a setup/login backoff expires. Model-free: the five
    * probes never reach the user's plan.
    */
   verifyLockdown(options: { force?: boolean } = {}): Promise<CodexLockdownResult | null> {

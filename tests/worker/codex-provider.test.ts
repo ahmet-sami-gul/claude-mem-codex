@@ -36,6 +36,7 @@ import {
   verifyCodexLockdown,
   type CodexProbeRequest,
   type CodexProbeResponse,
+  type VerifyCodexLockdownOptions,
 } from '../../src/services/worker/codex/codex-self-check.js';
 import { CodexViolationTracker } from '../../src/services/worker/codex/codex-exec-runner.js';
 import { telemetryBuffer } from '../../src/services/telemetry/buffer.js';
@@ -58,8 +59,9 @@ import type { DatabaseManager } from '../../src/services/worker/DatabaseManager.
 import type { SessionManager } from '../../src/services/worker/SessionManager.js';
 import type { ActiveSession } from '../../src/services/worker-types.js';
 
-const FEATURES = readFileSync(fixturePath('p0-features-list-locked.txt'), 'utf8');
-const PROMPT_INPUT = readFileSync(fixturePath('p0-prompt-input-locked.json'), 'utf8');
+const FEATURES = readFileSync(fixturePath('v0156-features-list-locked.txt'), 'utf8');
+const PROMPT_INPUT = readFileSync(fixturePath('v0156-prompt-input-locked.json'), 'utf8');
+const MODELS = readFileSync(fixturePath('v0156-models-catalog.json'), 'utf8');
 
 const mockMode = {
   name: 'code',
@@ -141,8 +143,9 @@ class FakeTransport implements CodexTransport {
 
 function probeRunner(): (request: CodexProbeRequest) => Promise<CodexProbeResponse> {
   const responses: Record<CodexProbeRequest['kind'], CodexProbeResponse> = {
-    version: { exitCode: 0, signal: null, stdout: 'codex-cli 0.144.4\n', stderr: '', timedOut: false },
+    version: { exitCode: 0, signal: null, stdout: 'codex-cli 0.156.1\n', stderr: '', timedOut: false },
     login_status: { exitCode: 0, signal: null, stdout: '', stderr: 'Logged in using ChatGPT\n', timedOut: false },
+    models_catalog: { exitCode: 0, signal: null, stdout: MODELS, stderr: '', timedOut: false },
     features_list: { exitCode: 0, signal: null, stdout: FEATURES, stderr: '', timedOut: false },
     prompt_input: { exitCode: 0, signal: null, stdout: PROMPT_INPUT, stderr: '', timedOut: false },
   };
@@ -230,6 +233,7 @@ async function readyProvider(
   const config = (provider as unknown as { getConfig(): CodexConfig }).getConfig();
   const verdict = await verifyCodexLockdown(config.binaryPath!, {
     model: config.model,
+    summaryModel: config.summaryModel,
     effort: config.effort,
     verbosity: config.verbosity,
     allowUntestedVersion: config.allowUntestedVersion,
@@ -527,13 +531,14 @@ describe('CodexProvider session lifecycle', () => {
 
   it('sends the summary turn to CLAUDE_MEM_CODEX_SUMMARY_MODEL, never a tier alias', async () => {
     settings.CLAUDE_MEM_CODEX_MODEL = 'gpt-5.6-luna';
-    settings.CLAUDE_MEM_CODEX_SUMMARY_MODEL = 'gpt-5.6-terra';
+    // Listed in the catalog fixture: the self-check checks the summary model too.
+    settings.CLAUDE_MEM_CODEX_SUMMARY_MODEL = 'gpt-5.5';
     const transport = new FakeTransport();
     const provider = await readyProvider(transport, [observationMessage, summarizeMessage]);
 
     await provider.startSession(makeSession());
 
-    expect(transport.calls.map(call => call.ctx.model)).toEqual(['gpt-5.6-luna', 'gpt-5.6-terra']);
+    expect(transport.calls.map(call => call.ctx.model)).toEqual(['gpt-5.6-luna', 'gpt-5.5']);
   });
 
   it('falls back to the observer model when no summary model is configured', async () => {
@@ -1117,6 +1122,30 @@ describe('CodexProvider readiness surface (M3 gate)', () => {
     expect(provider.readinessFingerprint()).toBeNull();
   });
 
+  it('checks the summary model too: it is a self-check input and part of the key', async () => {
+    const runner = probeRunner();
+    const runSelfCheck = mock((binaryPath: string, options: VerifyCodexLockdownOptions) =>
+      verifyCodexLockdown(binaryPath, { ...options, probeRunner: runner }));
+    const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), {
+      transport: new FakeTransport(),
+      runSelfCheck,
+    });
+
+    const observerOnly = provider.readinessFingerprint();
+    settings.CLAUDE_MEM_CODEX_SUMMARY_MODEL = 'gpt-5.6-luna'; // the observer model: same key
+    expect(provider.readinessFingerprint()).toBe(observerOnly);
+
+    // Summary and wrap-up execs run this model, and the catalog does not list it.
+    settings.CLAUDE_MEM_CODEX_SUMMARY_MODEL = 'gpt-5.3-codex';
+    expect(provider.readinessFingerprint()).not.toBe(observerOnly);
+    const verdict = await provider.verifyLockdown();
+    expect(runSelfCheck.mock.calls[0][1]).toMatchObject({ model: 'gpt-5.6-luna', summaryModel: 'gpt-5.3-codex' });
+    expect(verdict?.state).toBe('failed');
+    expect(verdict?.failure?.step).toBe('models_catalog');
+    expect(verdict?.failure?.error.message).toContain('summary model gpt-5.3-codex is not in the Codex model catalog');
+    expect(provider.readinessSnapshot().state).toBe('failed');
+  });
+
   it('passes `force` through with the same inputs the status read keys on', async () => {
     const runSelfCheck = mock(async (binaryPath: string) => PASSED(binaryPath));
     const provider = new CodexProvider(makeDbManager(), makeSessionManager([]), {
@@ -1130,6 +1159,7 @@ describe('CodexProvider readiness surface (M3 gate)', () => {
     expect(runSelfCheck.mock.calls[0][1]).toMatchObject({
       force: true,
       model: 'gpt-5.6-luna',
+      summaryModel: 'gpt-5.6-luna',
       effort: 'low',
       verbosity: 'low',
       allowUntestedVersion: false,

@@ -34,7 +34,12 @@ import {
   CodexViolationTracker,
   ExecTransport,
 } from '../../src/services/worker/codex/codex-exec-runner.js';
-import { evaluateCodexFeatures, evaluateCodexPromptInput, parseCodexFeaturesList } from '../../src/services/worker/codex/codex-self-check.js';
+import {
+  evaluateCodexFeatures,
+  evaluateCodexModelCatalog,
+  evaluateCodexPromptInput,
+  parseCodexFeaturesList,
+} from '../../src/services/worker/codex/codex-self-check.js';
 import { getObserverAuditLogPath, recordObserverToolAttempt } from '../../src/utils/observer-audit.js';
 import { OBSERVER_SESSIONS_DIR } from '../../src/shared/paths.js';
 import { createFakeCodex, fixturePath, IS_WINDOWS, waitForPidGone, type FakeCodex } from '../worker/codex/fake-codex.js';
@@ -95,6 +100,7 @@ describe('Codex observer lockdown', () => {
   describe('L0: closed argv builder', () => {
     const MANDATORY_FLAGS = [
       'exec',
+      '--strict-config',
       '--json',
       '--skip-git-repo-check',
       '--ignore-user-config',
@@ -120,6 +126,10 @@ describe('Codex observer lockdown', () => {
       'shell_environment_policy.inherit="none"',
       'forced_login_method="chatgpt"',
       'model_provider="openai"',
+      'agents.enabled=false',
+      'tools.update_plan.enabled=false',
+      'tools.experimental_request_user_input.enabled=false',
+      'skills.bundled.enabled=false',
     ];
 
     it('every model x effort x verbosity carries all mandatory flags, pins and disables', () => {
@@ -129,6 +139,8 @@ describe('Codex observer lockdown', () => {
         for (const pin of MANDATORY_PINS) expect(pins).toContain(pin);
         expect(pins.some((pin) => pin.startsWith('developer_instructions="'))).toBe(true);
         for (const feature of CODEX_DISABLED_FEATURES) expect(argv).toContain(`--disable=${feature}`);
+        // exec fails closed on an unknown -c key or feature name.
+        expect(argv.slice(0, 2)).toEqual(['exec', '--strict-config']);
         expect(argv[argv.length - 1]).toBe('-');
       }
     });
@@ -179,12 +191,14 @@ describe('Codex observer lockdown', () => {
 
     it('probe argv is read-only and carries exactly the exec pins and disables', () => {
       const pins = buildCodexConfigPins({ model: 'gpt-5.6-luna', effort: 'low', verbosity: 'low' });
-      for (const kind of ['version', 'login_status', 'features_list', 'prompt_input'] as CodexProbeKind[]) {
+      for (const kind of ['version', 'login_status', 'models_catalog', 'features_list', 'prompt_input'] as CodexProbeKind[]) {
         const argv = buildCodexProbeArgs(kind, { model: 'gpt-5.6-luna' });
         expect(() => assertCodexProbeArgvSafe(argv)).not.toThrow();
         expect(argv).not.toContain('exec');
         expect(argv).not.toContain('logout');
         expect(argv).not.toContain('--with-api-key');
+        expect(argv).not.toContain('--strict-config');
+        if (kind === 'models_catalog') expect(argv).toEqual(['debug', 'models']);
         if (kind === 'features_list' || kind === 'prompt_input') {
           const probePins = argv.filter((_, i) => i > 0 && argv[i - 1] === '-c' && !argv[i].startsWith('model='));
           expect(probePins).toEqual(pins);
@@ -194,6 +208,7 @@ describe('Codex observer lockdown', () => {
       expect(() => assertCodexProbeArgvSafe(['login'])).toThrow();
       expect(() => assertCodexProbeArgvSafe(['features', 'enable', 'shell_tool'])).toThrow();
       expect(() => assertCodexProbeArgvSafe(['logout'])).toThrow();
+      expect(() => assertCodexProbeArgvSafe(['debug', 'models', '--bundled'])).toThrow();
     });
 
     it('the builder is the single source of Codex flags in src/', () => {
@@ -247,24 +262,43 @@ describe('Codex observer lockdown', () => {
         CODEX_MANAGED_BY_NPM: '1',
         CLAUDE_CODE_EFFORT_LEVEL: 'MAX',
         TERM: 'xterm-256color',
+        CODEX_EXEC_SERVER_URL: 'ws://attacker.invalid:4500',
       };
       const env = buildCodexObserverEnv(sanitizeEnv(dirty), { CLAUDE_MEM_CODEX_HOME: '/home/tester/.codex' });
-      expect(Object.keys(env).sort()).toEqual(['CLAUDE_MEM_INTERNAL', 'CODEX_HOME', 'HOME', 'NO_COLOR', 'PATH', 'RUST_LOG', 'TERM'].sort());
-      expect(env).toMatchObject({ TERM: 'dumb', NO_COLOR: '1', RUST_LOG: 'error', CLAUDE_MEM_INTERNAL: '1', CODEX_HOME: '/home/tester/.codex' });
+      expect(Object.keys(env).sort()).toEqual(['CLAUDE_MEM_INTERNAL', 'CODEX_EXEC_SERVER_URL', 'CODEX_HOME', 'HOME', 'NO_COLOR', 'PATH', 'RUST_LOG', 'TERM'].sort());
+      expect(env).toMatchObject({
+        TERM: 'dumb',
+        NO_COLOR: '1',
+        RUST_LOG: 'error',
+        CLAUDE_MEM_INTERNAL: '1',
+        CODEX_HOME: '/home/tester/.codex',
+        // No execution environment, so no environment-bound tools; never inherited.
+        CODEX_EXEC_SERVER_URL: 'none',
+      });
     });
   });
 
   describe('L3: self-check canary and features', () => {
     it('rejects a canary that leaks skills/multi-agent instructions and a features list with multi_agent on', () => {
-      const items = JSON.parse(readFileSync(fixturePath('p0-prompt-input-locked.json'), 'utf8')) as unknown[];
+      const items = JSON.parse(readFileSync(fixturePath('v0156-prompt-input-locked.json'), 'utf8')) as unknown[];
       const multiAgent = { type: 'message', role: 'developer', content: [{ type: 'input_text', text: '<multi_agent_mode>spawn agents</multi_agent_mode>' }] };
       expect(evaluateCodexPromptInput(JSON.stringify([items[0], multiAgent, items[1]])).ok).toBe(false);
       expect(evaluateCodexPromptInput(JSON.stringify(items)).ok).toBe(true);
 
-      const features = readFileSync(fixturePath('p0-features-list-locked.txt'), 'utf8');
+      const features = readFileSync(fixturePath('v0156-features-list-locked.txt'), 'utf8');
       const leaky = features.split('\n').map((l) => (l.startsWith('multi_agent ') ? l.replace(/false$/, 'true') : l)).join('\n');
       expect(evaluateCodexFeatures(parseCodexFeaturesList(leaky)!).ok).toBe(false);
       expect(evaluateCodexFeatures(parseCodexFeaturesList(features)!).ok).toBe(true);
+      // unified_exec is forced on by 0.156.1: tolerated only while shell_tool is off.
+      const shell = features.split('\n').map((l) => (l.startsWith('shell_tool ') ? l.replace(/false$/, 'true') : l)).join('\n');
+      expect(evaluateCodexFeatures(parseCodexFeaturesList(shell)!).ok).toBe(false);
+    });
+
+    it('rejects a catalog entry granting a tool outside the accepted experimental set', () => {
+      const catalog = readFileSync(fixturePath('v0156-models-catalog.json'), 'utf8');
+      expect(evaluateCodexModelCatalog(catalog, 'gpt-6-luna').ok).toBe(true);
+      expect(evaluateCodexModelCatalog(catalog, 'test-unaccepted-experimental-tool').ok).toBe(false);
+      expect(evaluateCodexModelCatalog(catalog, 'test-direct-tool-mode').ok).toBe(false);
     });
   });
 

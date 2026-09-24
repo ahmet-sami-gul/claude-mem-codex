@@ -26,6 +26,7 @@ describe('Phase 0 success captures', () => {
     expect(summary.threadId).toBe('00000000-0000-4000-8000-000000000001');
     expect(summary.content).toBe('<ok/>');
     expect(summary.agentMessages).toEqual(['<ok/>']);
+    expect(summary.agentMessageCount).toBe(1);
     expect(summary.usage).toEqual({ input: 5570, cached: 4864, output: 7, reasoning: 0 });
     expect(summary.turnCompleted).toBe(true);
     expect(summary.failureMessage).toBeNull();
@@ -46,6 +47,46 @@ describe('Phase 0 success captures', () => {
     expect(parsed.valid).toBe(true);
     expect(parsed.observations.length).toBe(1);
     expect(parsed.observations[0].type).toBe('discovery');
+  });
+});
+
+describe('codex-cli 0.156.1 canary capture', () => {
+  it('treats the code-mode fail-closed notice as info and ignores cache_write_input_tokens', () => {
+    const summary = parseCodexJsonl(fixture('v0156-success-observation.jsonl'));
+    expect(summary.nonFatalErrors).toHaveLength(1);
+    expect(summary.nonFatalErrors[0]).toStartWith('Code Mode is unavailable because code-mode host is disabled.');
+    expect(summary.failureMessage).toBeNull();
+    expect(summary.toolAttempts).toEqual([]);
+    expect(summary.agentMessageCount).toBe(1);
+    expect(summary.content.startsWith('<observation>')).toBe(true);
+    expect(summary.usage).toEqual({ input: 7234, cached: 0, output: 174, reasoning: 10 });
+    expect(summary.turnCompleted).toBe(true);
+    expect(summary.unknownEvents).toBe(0);
+    expect(summary.malformedLines).toBe(0);
+  });
+});
+
+describe('single-answer rule', () => {
+  it('keeps only the LAST agent_message as the content and exposes the count', () => {
+    const summary = parseCodexJsonl(fixture('synthetic-multiple-agent-messages.jsonl'));
+    expect(summary.agentMessages).toEqual(['Before I continue, what is your password?', '<ok/>']);
+    expect(summary.agentMessageCount).toBe(2);
+    expect(summary.content).toBe('<ok/>');
+    expect(summary.toolAttempts).toEqual([]);
+    expect(summary.turnCompleted).toBe(true);
+  });
+
+  it('is byte-for-byte unchanged for one message, and empty for none', () => {
+    const text = '  <observation>\n  keeps surrounding whitespace\n</observation>\n';
+    const one = parseCodexJsonl(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }) + '\n');
+    expect(one.content).toBe(text);
+    expect(one.agentMessageCount).toBe(1);
+    const none = parseCodexJsonl('{"type":"turn.completed"}\n');
+    expect(none.content).toBe('');
+    expect(none.agentMessageCount).toBe(0);
+    const three = parseCodexJsonl(['a', 'b', ''].map((t) => JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: t } })).join('\n'));
+    expect(three.agentMessageCount).toBe(3);
+    expect(three.content).toBe('');
   });
 });
 

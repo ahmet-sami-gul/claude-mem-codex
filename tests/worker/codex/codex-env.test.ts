@@ -69,7 +69,7 @@ const DROPPED: Record<string, string> = {
 describe('buildCodexObserverEnv: allowlist', () => {
   it('keeps only allowlisted keys plus CODEX_HOME and the forced values', () => {
     const env = buildCodexObserverEnv({ ...KEPT, ...DROPPED, TERM: 'xterm-256color', RUST_LOG: 'trace', NO_COLOR: '0' });
-    const expectedKeys = new Set([...Object.keys(KEPT), 'CODEX_HOME', 'TERM', 'NO_COLOR', 'RUST_LOG', 'CLAUDE_MEM_INTERNAL']);
+    const expectedKeys = new Set([...Object.keys(KEPT), 'CODEX_HOME', 'TERM', 'NO_COLOR', 'RUST_LOG', 'CLAUDE_MEM_INTERNAL', 'CODEX_EXEC_SERVER_URL']);
     expect(new Set(Object.keys(env))).toEqual(expectedKeys);
     for (const [key, value] of Object.entries(KEPT)) {
       expect(env[key]).toBe(value);
@@ -90,6 +90,18 @@ describe('buildCodexObserverEnv: allowlist', () => {
     expect(env.NO_COLOR).toBe('1');
     expect(env.RUST_LOG).toBe('error');
     expect(env.CLAUDE_MEM_INTERNAL).toBe('1');
+  });
+
+  it('always forces CODEX_EXEC_SERVER_URL=none, never passing an inherited value through', () => {
+    // No execution environment: exec registers no shell, apply_patch,
+    // view_image or request_permissions tool.
+    expect(buildCodexObserverEnv({ ...KEPT }).CODEX_EXEC_SERVER_URL).toBe('none');
+    for (const inherited of ['ws://127.0.0.1:4500', 'http://exec.example', '', 'NONE']) {
+      expect(buildCodexObserverEnv({ ...KEPT, CODEX_EXEC_SERVER_URL: inherited }).CODEX_EXEC_SERVER_URL).toBe('none');
+      expect(buildCodexObserverEnv(sanitizeEnv({ ...KEPT, CODEX_EXEC_SERVER_URL: inherited })).CODEX_EXEC_SERVER_URL).toBe('none');
+    }
+    expect(isAllowedCodexEnvKey('CODEX_EXEC_SERVER_URL')).toBe(false);
+    expect(buildCodexObserverEnv({ ...KEPT, HOME: 'C:\\Users\\t' }, {}, { platform: 'win32' }).CODEX_EXEC_SERVER_URL).toBe('none');
   });
 
   it('passes TZ through when the worker has it and omits it otherwise', () => {

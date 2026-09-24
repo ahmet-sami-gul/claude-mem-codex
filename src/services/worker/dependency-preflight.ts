@@ -196,12 +196,13 @@ export function runWorkerDependencyPreflight(options: WorkerDependencyPreflightO
     // a binary?" and "does it pass the lockdown self-check?" — and only the
     // first one belongs here.
     //
-    // The self-check spawns four probe subprocesses (`--version`,
-    // `features list`, `debug prompt-input`, `login status`) and is async by
-    // construction. This function is synchronous and runs on the worker's boot
-    // path (worker-service.ts), so awaiting it would hold the whole worker
-    // shut behind four process spawns before a single route is mounted, and
-    // NOT awaiting it would record a verdict that had not been reached.
+    // The self-check spawns five probe subprocesses (`--version`,
+    // `login status`, `debug models`, `features list`, `debug prompt-input`)
+    // and is async by construction. This function is synchronous and runs on
+    // the worker's boot path (worker-service.ts), so awaiting it would hold the
+    // whole worker shut behind five process spawns before a single route is
+    // mounted, and NOT awaiting it would record a verdict that had not been
+    // reached.
     //
     // The self-check therefore runs from the non-blocking codex gate in
     // SessionRoutes instead. Skipping it here costs nothing: the gate refuses

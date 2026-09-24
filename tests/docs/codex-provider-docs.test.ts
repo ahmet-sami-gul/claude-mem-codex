@@ -2,8 +2,25 @@ import { describe, it, expect } from 'bun:test';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { CODEX_CONFIG_BOUNDS } from '../../src/services/worker/CodexProvider.js';
-import { CODEX_DISABLED_FEATURES, CODEX_MODEL_ALLOWLIST, MODEL_ID_RE } from '../../src/services/worker/codex/codex-invocation.js';
-import { CODEX_TESTED_VERSION_RANGE } from '../../src/services/worker/codex/codex-self-check.js';
+import {
+  CODEX_CONFIG_PINS,
+  CODEX_DEFAULT_MODEL,
+  CODEX_DISABLED_FEATURES,
+  CODEX_FORCED_ENABLED_FEATURES,
+  CODEX_MODEL_ALLOWLIST,
+  CODEX_MODEL_MIN_CLI_VERSION,
+  MODEL_ID_RE,
+  buildCodexProbeArgs,
+  type CodexProbeKind,
+} from '../../src/services/worker/codex/codex-invocation.js';
+import { CODEX_ENV_FORCED } from '../../src/services/worker/codex/codex-env.js';
+import { classifyCodexFailure } from '../../src/services/worker/codex/codex-errors.js';
+import {
+  CODEX_ACCEPTED_EXPERIMENTAL_TOOLS,
+  CODEX_PROBE_ORDER,
+  CODEX_PROBE_TIMEOUTS_MS,
+  CODEX_TESTED_VERSION_RANGE,
+} from '../../src/services/worker/codex/codex-self-check.js';
 
 /**
  * The Codex provider docs (plan 3.11) against the code they describe.
@@ -123,6 +140,51 @@ describe('docs/public/usage/codex-provider.mdx', () => {
 
   it('states the tested codex-cli range', () => {
     expect(codexPage).toContain(`${CODEX_TESTED_VERSION_RANGE.minInclusive.join('.')} up to (not including) ${CODEX_TESTED_VERSION_RANGE.maxExclusive.slice(0, 2).join('.')}`);
+  });
+
+  it('shows the exec argv with --strict-config, the 0.156 pins and the forced exec-server env', () => {
+    expect(codexPage).toContain('codex exec --strict-config --json');
+    for (const key of ['agents.enabled', 'tools.update_plan.enabled', 'tools.experimental_request_user_input.enabled', 'skills.bundled.enabled']) {
+      expect(codexPage).toContain(`\`${key}=${CODEX_CONFIG_PINS[key]}\``);
+    }
+    expect(codexPage).toContain(`\`CODEX_EXEC_SERVER_URL=${CODEX_ENV_FORCED.CODEX_EXEC_SERVER_URL}\``);
+    for (const feature of CODEX_FORCED_ENABLED_FEATURES) {
+      expect(codexPage).toContain(`**\`${feature}\` stays on.**`);
+    }
+  });
+
+  it('lists every self-check probe, in order, with the catalog probe and its accepted tools', () => {
+    // The numbered list follows the order the self-check runs the probes in.
+    expect([...CODEX_PROBE_ORDER].sort()).toEqual((Object.keys(CODEX_PROBE_TIMEOUTS_MS) as CodexProbeKind[]).sort());
+    const commands = CODEX_PROBE_ORDER.map(kind => `codex ${buildCodexProbeArgs(kind, { model: CODEX_DEFAULT_MODEL }).slice(0, 2).join(' ')}`);
+    const documented = [...codexPage.matchAll(/^\d\. `(codex [^`]+)`/gm)].map(match => match[1]);
+    expect(documented).toEqual(commands);
+    expect(codexPage).toContain('the worker runs five probes');
+    expect(codexPage).not.toContain('four probes');
+
+    const catalogItem = codexPage.split('\n').find(line => line.startsWith('3. `codex debug models`'));
+    expect(catalogItem).toBeDefined();
+    for (const tool of CODEX_ACCEPTED_EXPERIMENTAL_TOOLS) {
+      expect(catalogItem).toContain(`\`${tool}\``);
+    }
+
+    const longest = Math.max(...Object.values(CODEX_PROBE_TIMEOUTS_MS)) / 1000;
+    expect(codexPage).toContain(`(5–${longest} s limit)`);
+  });
+
+  it('states the minimum codex-cli version of each model that has one, and how the gate fails', () => {
+    const versionItem = codexPage.split('\n').find(line => line.startsWith('1. `codex --version`'));
+    expect(versionItem).toBeDefined();
+    for (const [model, [major, minor]] of Object.entries(CODEX_MODEL_MIN_CLI_VERSION)) {
+      expect(versionItem).toContain(`\`${model}\``);
+      expect(versionItem).toContain(`${major}.${minor}`);
+    }
+
+    const outcome = classifyCodexFailure({ condition: 'model_needs_newer_cli' });
+    if (outcome.type !== 'error') throw new Error('model_needs_newer_cli must classify as an error');
+    expect(outcome.error.code).toBe('codex_model_needs_newer_cli');
+    expect(tableRow(codexPage, 'version`, `codex_model_needs_newer_cli')[0]).toBe('`version`, `codex_model_needs_newer_cli`');
+    expect(tableRow(codexPage, 'models_catalog')[0]).toStartWith('`models_catalog`');
   });
 });
 

@@ -1,0 +1,44 @@
+{
+  "models": [
+    {
+      "slug": "gpt-5.6-luna",
+      "tool_mode": "code_mode_only",
+      "experimental_supported_tools": []
+    },
+    {
+      "slug": "gpt-6-luna",
+      "tool_mode": "code_mode_only",
+      "experimental_supported_tools": [
+        "send_user_message_async",
+        "clock"
+      ]
+    },
+    {
+      "slug": "gpt-5.5",
+      "tool_mode": null,
+      "experimental_supported_tools": []
+    },
+    {
+      "slug": "test-no-tool-fields"
+    },
+    {
+      "slug": "test-unaccepted-experimental-tool",
+      "tool_mode": "code_mode_only",
+      "experimental_supported_tools": [
+        "send_user_message_async",
+        "clock",
+        "exec_command"
+      ]
+    },
+    {
+      "slug": "test-direct-tool-mode",
+      "tool_mode": "direct",
+      "experimental_supported_tools": []
+    },
+    {
+      "slug": "test-tools-not-a-list",
+      "tool_mode": null,
+      "experimental_supported_tools": "clock"
+    }
+  ]
+}

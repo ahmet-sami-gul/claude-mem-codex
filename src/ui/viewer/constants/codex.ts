@@ -62,14 +62,17 @@ export function isProviderOptionSelectable(option: string, persistedProvider: st
 export const CODEX_DEFAULT_MODEL = 'gpt-5.6-luna';
 
 export const CODEX_MODEL_OPTIONS: readonly SelectOption[] = [
-  { value: 'gpt-5.6-luna', label: 'gpt-5.6-luna (default, widest plan allowance)' },
+  { value: 'gpt-5.6-luna', label: 'gpt-5.6-luna (default)' },
   { value: 'gpt-5.6-terra', label: 'gpt-5.6-terra' },
   { value: 'gpt-5.6-sol', label: 'gpt-5.6-sol (much smaller Plus allowance)' },
   { value: 'gpt-5.5', label: 'gpt-5.5' },
+  { value: 'gpt-6-luna', label: 'gpt-6-luna (larger Plus allowance than gpt-5.6-luna)' },
+  { value: 'gpt-6-sol', label: 'gpt-6-sol (much smaller Plus allowance)' },
+  { value: 'gpt-6-astra', label: 'gpt-6-astra (smallest Plus allowance)' },
 ];
 
 /** Models whose ChatGPT Plus allowance is a small fraction of gpt-5.6-luna's. */
-export const CODEX_SMALL_ALLOWANCE_MODELS: ReadonlySet<string> = new Set(['gpt-5.6-sol']);
+export const CODEX_SMALL_ALLOWANCE_MODELS: ReadonlySet<string> = new Set(['gpt-5.6-sol', 'gpt-6-sol', 'gpt-6-astra']);
 
 export const CODEX_LEVEL_OPTIONS: readonly SelectOption[] = [
   { value: 'low', label: 'low (default)' },

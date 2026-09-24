@@ -23,9 +23,9 @@
  *      CODEX_GATE_RECHECK_MAX_BACKOFF_MS; only an answered turn from a run
  *      admitted after the problem resets it.
  *   3. It never spends. Nothing here runs `codex exec`: the snapshot reads
- *      caches, and the re-check is the four-probe self-check (`--version`,
- *      `login status`, `features list`, `debug prompt-input`), none of which
- *      reaches the user's plan.
+ *      caches, and the re-check is the five-probe self-check (`--version`,
+ *      `login status`, `debug models`, `features list`, `debug prompt-input`),
+ *      none of which reaches the user's plan.
  *
  * Every problem it finds ends in exactly one place: a `codex_cli` dependency
  * record (the backoff) plus an observer-health record with alert threshold 1

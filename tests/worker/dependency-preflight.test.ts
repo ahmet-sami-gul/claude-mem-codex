@@ -135,9 +135,9 @@ describe('worker dependency preflight', () => {
    * Plan 3.5, M3. The codex branch resolves the binary and NOTHING else.
    *
    * The thing these tests are really defending is the omission: the Codex
-   * lockdown self-check spawns four probe subprocesses and is async, preflight
+   * lockdown self-check spawns five probe subprocesses and is async, preflight
    * is synchronous and runs on the worker's boot path, so a self-check here
-   * would put four process spawns in front of the worker's first route.
+   * would put five process spawns in front of the worker's first route.
    */
   describe('codex provider', () => {
     function runCodexPreflight(findCodexExecutable: () => unknown, codexPath = '') {
@@ -260,7 +260,7 @@ describe('worker dependency preflight', () => {
     });
 
     it('does not run the lockdown self-check — resolution is the only probe', () => {
-      // The self-check spawns four probes and is async; on the boot path it
+      // The self-check spawns five probes and is async; on the boot path it
       // would hold the worker shut. Spied on the real module, so a preflight
       // that started one — awaited or not — is caught here. Never-settling
       // stand-ins: if it WERE called, nothing may spawn.

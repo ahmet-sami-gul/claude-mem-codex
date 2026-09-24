@@ -269,6 +269,7 @@ describe('classifyCodexFailure: runner conditions and precedence', () => {
     spawn_failed: ['setup_required', 'codex_spawn_failed'],
     lockdown_breach: ['setup_required', 'codex_lockdown_breach'],
     version_untested: ['setup_required', 'codex_version_untested'],
+    model_needs_newer_cli: ['setup_required', 'codex_model_needs_newer_cli'],
     self_check_failed: ['setup_required', 'codex_self_check_failed'],
     api_key_login: ['setup_required', 'codex_api_key_login'],
     missing_turn_completed: ['transient', 'codex_missing_turn_completed'],
@@ -287,6 +288,7 @@ describe('classifyCodexFailure: runner conditions and precedence', () => {
   it('definitive conditions win over upstream text; soft conditions lose to it', () => {
     const quotaText = "You've hit your usage limit. Try again at 3:45 PM.";
     expect(expectError(classify({ condition: 'timeout', failureMessage: quotaText })).error.code).toBe('codex_timeout');
+    expect(expectError(classify({ condition: 'model_needs_newer_cli', failureMessage: quotaText })).error.code).toBe('codex_model_needs_newer_cli');
     expect(expectError(classify({ condition: 'spawn_failed', stderrTail: quotaText })).error.code).toBe('codex_spawn_failed');
     expect(expectError(classify({ condition: 'missing_turn_completed', failureMessage: quotaText })).error.kind).toBe('quota_exhausted');
   });

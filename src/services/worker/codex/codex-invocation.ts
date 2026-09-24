@@ -2,7 +2,7 @@
  * Closed argv builder for every Codex subprocess (plan 2.2, 2.10, 5/L0).
  *
  * This module is the ONLY place that knows Codex flags. The observer turn, the
- * summary turn, the Telegram wrap-up and the four self-check probes all build
+ * summary turn, the Telegram wrap-up and the five self-check probes all build
  * their argv here, so the lockdown is reviewed in one file.
  *
  * Rules enforced below:
@@ -16,15 +16,23 @@
  *     a `--x ''` pair.
  *   - The prompt is never an argument: exec reads it from stdin (`-`). argv is
  *     visible in `ps`, and macOS ARG_MAX (~1 MB) is below the largest prompt.
- *   - Features are only ever turned off with `--disable=<name>`. `-c
- *     features.<x>=false` is never used because unknown `-c` keys are accepted
- *     silently, so a renamed feature would stay on without any error.
+ *   - Features are only ever turned off with `--disable=<name>`, never with
+ *     `-c features.<x>=false`. exec runs with `--strict-config`, so an unknown
+ *     `-c` key or feature name fails the call closed instead of being accepted
+ *     silently (a renamed pin or feature would otherwise stay on without any
+ *     error). `features list` and `debug prompt-input` reject that flag; there
+ *     an unknown `--disable` name is still a hard error and the self-check
+ *     requires every disabled name to be listed.
  *   - Probe argv never contains a write subcommand (`login` without `status`,
  *     `login --with-api-key`, `logout`, `features enable|disable`).
  *
  * Phase 0 (olcumler/FAZ0-OLCUM-NOTU.md) ran the full exec argv below with the
  * native binary under `env -i` and it worked as one unit; `debug prompt-input`
  * with the same pins produced exactly [developer (our text), user (canary)].
+ * The codex-cli 0.156.1 canary (olcumler/codex-guncelleme/0.156.1) re-ran it
+ * with the pins, disables and `--strict-config` below plus
+ * CODEX_EXEC_SERVER_URL=none (codex-env.ts) on gpt-5.6-luna and gpt-6-luna:
+ * every run answered with exactly one agent_message and no tool item.
  *
  * Pure module: no I/O, no logging.
  */
@@ -41,11 +49,17 @@ export const CODEX_MODEL_ALLOWLIST = Object.freeze([
   'gpt-5.6-terra',
   'gpt-5.6-sol',
   'gpt-5.5',
+  'gpt-6-luna',
+  'gpt-6-sol',
+  'gpt-6-astra',
 ] as const);
 
 export type CodexAllowlistedModel = (typeof CODEX_MODEL_ALLOWLIST)[number];
 
-/** Widest plan share, v1 model, no `/root` injection (plan 4). */
+/**
+ * The Phase 0 model (plan 4): v1, and its catalog entry grants no experimental
+ * tools. gpt-6-luna has a larger Plus allowance but is not the default.
+ */
 export const CODEX_DEFAULT_MODEL: CodexAllowlistedModel = 'gpt-5.6-luna';
 
 /**
@@ -61,11 +75,38 @@ export const CODEX_DEFAULT_REASONING_EFFORT: CodexReasoningEffort = 'low';
 export const CODEX_DEFAULT_VERBOSITY: CodexVerbosity = 'low';
 
 /**
- * v2 models inject multi-agent usage hints. Blanking them is recommended by the
- * plan (2.2); it was NOT exercised in Phase 0 because the default model (luna)
- * is v1 and needs no extra pins.
+ * Models whose catalog entry says `multi_agent_version: v2`; they inject two
+ * multi-agent usage hints. On codex-cli 0.156.1 CODEX_V2_MODEL_PINS blank both
+ * hint messages (verified model-free with prompt-input) but do not remove the
+ * multi-agent tools. `agents.enabled=false` (CODEX_CONFIG_PINS) removes the
+ * hints and the tools for every model; these pins stay as defence in depth.
  */
-export const CODEX_V2_MODELS: ReadonlySet<string> = new Set(['gpt-5.6-sol', 'gpt-5.6-terra']);
+export const CODEX_V2_MODELS: ReadonlySet<string> = new Set([
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-6-luna',
+  'gpt-6-sol',
+  'gpt-6-astra',
+]);
+
+/**
+ * Oldest codex-cli that knows a model, from the bundled 0.156.1 catalog
+ * (`minimal_client_version`). The CLI itself never enforces it: an older
+ * binary falls back to generic model metadata and sends the request anyway, so
+ * the self-check refuses the pairing instead.
+ */
+export const CODEX_MODEL_MIN_CLI_VERSION: Readonly<Record<string, readonly [number, number, number]>> = Object.freeze({
+  'gpt-6-luna': [0, 155, 0] as const,
+  'gpt-6-sol': [0, 155, 0] as const,
+  'gpt-6-astra': [0, 153, 0] as const,
+});
+
+/** Minimum codex-cli `[major, minor, patch]` for `model`, or null when it has none. */
+export function codexModelMinCliVersion(model: string): readonly [number, number, number] | null {
+  return Object.prototype.hasOwnProperty.call(CODEX_MODEL_MIN_CLI_VERSION, model)
+    ? CODEX_MODEL_MIN_CLI_VERSION[model]
+    : null;
+}
 
 export function isValidCodexModelId(value: unknown): value is string {
   return typeof value === 'string' && MODEL_ID_RE.test(value);
@@ -156,6 +197,18 @@ export function tomlBasicString(value: string): string {
  * Fixed `-c` pins as `key -> TOML literal`, in argv order. The two variable
  * pins (`model_reasoning_effort`, `model_verbosity`) are inserted by
  * buildCodexConfigPins at the positions Phase 0 validated.
+ *
+ * The last four are codex-cli 0.156 keys (0.144.4 does not know them; the
+ * self-check's tested range refuses that version anyway):
+ *   - `agents.enabled=false` removes the multi-agent (collab) tools and hint
+ *     messages for EVERY model. The catalog's `multi_agent_version` otherwise
+ *     beats `--disable=multi_agent`, and exec never shows most collab calls on
+ *     the JSONL stream, so the runtime guard could not catch them.
+ *   - `tools.update_plan.enabled=false` keeps update_plan (todo_list) off.
+ *   - `tools.experimental_request_user_input.enabled=false` removes
+ *     request_user_input, which is on by default and model-only.
+ *   - `skills.bundled.enabled=false` stops (re)installing the bundled skills
+ *     and injecting them on an explicit `$skill` mention.
  */
 export const CODEX_CONFIG_PINS: Readonly<Record<string, string>> = Object.freeze({
   approval_policy: '"never"',
@@ -179,18 +232,35 @@ export const CODEX_CONFIG_PINS: Readonly<Record<string, string>> = Object.freeze
   forced_login_method: '"chatgpt"',
   model_provider: '"openai"',
   developer_instructions: tomlBasicString(CODEX_OBSERVER_DEVELOPER_INSTRUCTIONS),
+  'agents.enabled': 'false',
+  'tools.update_plan.enabled': 'false',
+  'tools.experimental_request_user_input.enabled': 'false',
+  'skills.bundled.enabled': 'false',
 });
 
-/** Extra pins for v2 models (CODEX_V2_MODELS). Not validated in Phase 0. */
+/** Extra pins for v2 models (CODEX_V2_MODELS): blank the two hint texts (see CODEX_V2_MODELS). */
 export const CODEX_V2_MODEL_PINS: Readonly<Record<string, string>> = Object.freeze({
   'features.multi_agent_v2.root_agent_usage_hint_text': '""',
   'features.multi_agent_v2.multi_agent_mode_hint_text': '""',
 });
 
 /**
- * Every feature turned off with `--disable=<name>`. After these, `codex
- * features list` shows only enable_request_compression and remote_compaction_v2
- * enabled, besides flags in the "removed" stage (Phase 0).
+ * Every feature turned off with `--disable=<name>`: the 27 Phase 0 names, then
+ * the codex-cli 0.156.1 additions. All 52 are known names on 0.156.1; the new
+ * ones are unknown on 0.144.4, where an unknown `--disable` is a hard error, so
+ * an older binary is refused rather than half locked down. After these (and
+ * CODEX_CONFIG_PINS), `codex features list` shows only
+ * CODEX_EXPECTED_ENABLED_FEATURES and CODEX_FORCED_ENABLED_FEATURES enabled,
+ * besides flags in the "removed" stage.
+ *
+ * Two entries are documented no-ops on 0.156.1, kept so the list stays a
+ * superset: `unified_exec` (managed_features.rs turns it back on after all
+ * user config; see CODEX_FORCED_ENABLED_FEATURES) and `personality` (now in
+ * the "removed" stage). Of the additions, sleep_tool, view_image,
+ * unified_exec_tty, worktrees and unbounded_connection_retries remove a tool,
+ * file access, a write path or an endless network retry; multi_agent_v2 must
+ * be off because it takes precedence over `agents.enabled=false`; the rest
+ * keep the enabled set strict.
  */
 export const CODEX_DISABLED_FEATURES = Object.freeze([
   'shell_tool',
@@ -220,15 +290,52 @@ export const CODEX_DISABLED_FEATURES = Object.freeze([
   'mentions_v2',
   'guardian_approval',
   'fast_mode',
+  'compaction_image_budget',
+  'content_item_kinds',
+  'guardian_reuse_parent_compaction',
+  'in_app_chat',
+  'in_app_dictation',
+  'in_app_local_automation',
+  'in_app_updates',
+  'realtime_conversation',
+  'skill_search',
+  'sleep_tool',
+  'system_proxy_fallback',
+  'unbounded_connection_retries',
+  'unified_exec_tty',
+  'view_image',
+  'worktrees',
+  'multi_agent_v2',
+  'code_mode',
+  'code_mode_only',
+  'send_message_to_user_async',
+  'request_permissions_tool',
+  'standalone_web_search',
+  'current_time_reminder',
+  'token_budget',
+  'agent_message_board',
+  'unified_exec_zsh_fork',
 ] as const);
 
 /**
  * Features the self-check tolerates as still enabled after the disables
- * (flags in the "removed" stage are ignored separately).
+ * (flags in the "removed" stage are ignored separately). remote_compaction_v2
+ * is in the "removed" stage on 0.156.1.
  */
 export const CODEX_EXPECTED_ENABLED_FEATURES = Object.freeze([
   'enable_request_compression',
-  'remote_compaction_v2',
+] as const);
+
+/**
+ * Features codex-cli 0.156.1 forces on after all user config, whatever
+ * `--disable` says (managed_features.rs; only managed requirements can keep
+ * them off). unified_exec is harmless only because `--disable=shell_tool`
+ * keeps exec_command / write_stdin unregistered (spec_plan.rs
+ * add_shell_tools returns early), so the self-check tolerates it ONLY while
+ * the features list shows shell_tool disabled.
+ */
+export const CODEX_FORCED_ENABLED_FEATURES = Object.freeze([
+  'unified_exec',
 ] as const);
 
 // ---------------------------------------------------------------------------
@@ -239,6 +346,13 @@ export const CODEX_EXPECTED_ENABLED_FEATURES = Object.freeze([
  * Arguments the builder must never produce (plan 2.2). `--full-auto` and
  * `--output-last-message` are added on top of the plan list: the first widens
  * the sandbox, the second is the long form of `-o` and writes a file.
+ * `--approve-for-me` (alias `--not-so-yolo`, codex-cli 0.156) injects
+ * workspace-write + on-request approvals after our pins, which the sandbox
+ * substring check cannot see in argv; `--yolo` is an alias of
+ * `--dangerously-bypass-approvals-and-sandbox`; `--worktree` creates a git
+ * worktree on disk; `--thread-source` reclassifies the thread's source; `fork`
+ * and `review` are model-running subcommands. `--full-auto` no longer exists
+ * on 0.156 and stays listed.
  */
 export const CODEX_FORBIDDEN_ARGS = Object.freeze([
   '--dangerously-bypass-approvals-and-sandbox',
@@ -255,6 +369,13 @@ export const CODEX_FORBIDDEN_ARGS = Object.freeze([
   '-o',
   '--output-last-message',
   '--full-auto',
+  '--approve-for-me',
+  '--not-so-yolo',
+  '--yolo',
+  '--worktree',
+  '--thread-source',
+  'fork',
+  'review',
   'resume',
   '--last',
   '--all',
@@ -392,9 +513,12 @@ function disableFlags(): string[] {
 /**
  * argv (without the binary) for one observer / summary / wrap-up turn:
  *
- *   exec --json --skip-git-repo-check --ignore-user-config --ignore-rules
- *     --color=never --cd=<jail> --sandbox=read-only --model=<model> --ephemeral
- *     -c <pin> ... --disable=<feature> ... -
+ *   exec --strict-config --json --skip-git-repo-check --ignore-user-config
+ *     --ignore-rules --color=never --cd=<jail> --sandbox=read-only
+ *     --model=<model> --ephemeral -c <pin> ... --disable=<feature> ... -
+ *
+ * `--strict-config` sits right after `exec`: exec then fails closed on an
+ * unknown `-c` key or feature name. It is exec-only; the probes never get it.
  */
 export function buildCodexExecArgs(input: CodexExecArgsInput): string[] {
   assertModel(input.model);
@@ -404,6 +528,7 @@ export function buildCodexExecArgs(input: CodexExecArgsInput): string[] {
 
   const args = [
     'exec',
+    '--strict-config',
     '--json',
     '--skip-git-repo-check',
     '--ignore-user-config',
@@ -425,7 +550,7 @@ export function buildCodexExecArgs(input: CodexExecArgsInput): string[] {
 // Probe argv (plan 2.10)
 // ---------------------------------------------------------------------------
 
-export type CodexProbeKind = 'version' | 'login_status' | 'features_list' | 'prompt_input';
+export type CodexProbeKind = 'version' | 'login_status' | 'models_catalog' | 'features_list' | 'prompt_input';
 
 /** User item the prompt-input probe must echo back verbatim. */
 export const CODEX_PROBE_CANARY = 'CLAUDE_MEM_CODEX_CANARY';
@@ -440,6 +565,7 @@ export interface CodexProbeArgsInput {
 
 /** Flags `debug prompt-input` does not accept; they must never reach it. */
 const PROMPT_INPUT_REJECTED_FLAGS: readonly string[] = [
+  '--strict-config',
   '--model',
   '--sandbox',
   '--cd',
@@ -453,9 +579,11 @@ const PROMPT_INPUT_REJECTED_FLAGS: readonly string[] = [
 
 /**
  * Throws CodexArgvViolationError unless `args` is a read-only probe:
- * `--version`, `login status`, `features list ...` or `debug prompt-input ...`.
- * Write subcommands (`login` alone, `login --with-api-key`, `logout`,
- * `features enable|disable`) and `exec` are rejected.
+ * `--version`, `login status`, `debug models`, `features list ...` or
+ * `debug prompt-input ...`. Write subcommands (`login` alone,
+ * `login --with-api-key`, `logout`, `features enable|disable`) and `exec` are
+ * rejected, and so is `debug models --bundled` (it would skip the refreshed
+ * catalog exec actually uses).
  */
 export function assertCodexProbeArgvSafe(args: readonly string[]): void {
   assertCodexArgvSafe(args);
@@ -478,8 +606,12 @@ export function assertCodexProbeArgvSafe(args: readonly string[]): void {
       }
       return;
     case 'debug':
+      if (second === 'models') {
+        if (args.length !== 2) throw new CodexArgvViolationError('Codex catalog probe must be exactly `debug models`', args.join(' '));
+        return;
+      }
       if (second !== 'prompt-input') {
-        throw new CodexArgvViolationError('Codex debug probe must be `debug prompt-input`', args.join(' '));
+        throw new CodexArgvViolationError('Codex debug probe must be `debug prompt-input` or `debug models`', args.join(' '));
       }
       for (const token of args) {
         for (const flag of PROMPT_INPUT_REJECTED_FLAGS) {
@@ -497,9 +629,13 @@ export function assertCodexProbeArgvSafe(args: readonly string[]): void {
 /**
  * argv (without the binary) for a self-check probe. None of these calls a
  * model. `features list` and `prompt-input` carry exactly the exec pins and
- * disables; `prompt-input` gets the model through `-c model=` because it
- * accepts only `-c`, `-i`, `--enable` and `--disable`. The probes' cwd is the
- * self-check jail (OBSERVER_SESSIONS_DIR/codex-selfcheck), set at spawn.
+ * disables (never `--strict-config`, which both reject); `prompt-input` gets
+ * the model through `-c model=` because it accepts only `-c`, `-i`, `--enable`
+ * and `--disable`. `debug models` prints the model catalog from the same
+ * CODEX_HOME and needs no pins; unlike exec it loads that home's config.toml,
+ * so the self-check refuses one that sets `model_catalog_json`. The probes'
+ * cwd is the self-check jail (OBSERVER_SESSIONS_DIR/codex-selfcheck), set at
+ * spawn.
  */
 export function buildCodexProbeArgs(kind: CodexProbeKind, input: CodexProbeArgsInput): string[] {
   const effort = input.effort ?? CODEX_DEFAULT_REASONING_EFFORT;
@@ -511,6 +647,9 @@ export function buildCodexProbeArgs(kind: CodexProbeKind, input: CodexProbeArgsI
       break;
     case 'login_status':
       args = ['login', 'status'];
+      break;
+    case 'models_catalog':
+      args = ['debug', 'models'];
       break;
     case 'features_list':
       args = [

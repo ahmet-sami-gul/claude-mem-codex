@@ -78,8 +78,18 @@ describe('viewer codex constants mirror the worker', () => {
     for (const model of CODEX_SMALL_ALLOWANCE_MODELS) {
       expect(CODEX_MODEL_ALLOWLIST as readonly string[]).toContain(model);
     }
-    expect(CODEX_SMALL_ALLOWANCE_MODELS.has('gpt-5.6-sol')).toBe(true);
+    expect([...CODEX_SMALL_ALLOWANCE_MODELS].sort()).toEqual(['gpt-5.6-sol', 'gpt-6-astra', 'gpt-6-sol']);
     expect(CODEX_SMALL_ALLOWANCE_MODELS.has(CODEX_DEFAULT_MODEL)).toBe(false);
+    expect(CODEX_SMALL_ALLOWANCE_MODELS.has('gpt-6-luna')).toBe(false);
+  });
+
+  it('labels the GPT-6 models by their Plus allowance', () => {
+    const labels = Object.fromEntries(CODEX_MODEL_OPTIONS.map(option => [option.value, option.label]));
+    expect(labels['gpt-6-luna']).toBe('gpt-6-luna (larger Plus allowance than gpt-5.6-luna)');
+    expect(labels['gpt-6-sol']).toBe('gpt-6-sol (much smaller Plus allowance)');
+    expect(labels['gpt-6-astra']).toBe('gpt-6-astra (smallest Plus allowance)');
+    // gpt-6-luna has the larger Plus allowance, so the default no longer claims the widest.
+    expect(labels[CODEX_DEFAULT_MODEL]).toBe('gpt-5.6-luna (default)');
   });
 
   it('offers exactly the reasoning efforts and verbosities the argv builder accepts', () => {
@@ -257,6 +267,8 @@ describe('effective codex values (what CodexProvider.getConfig runs with)', () =
   it('flags the small-allowance model whatever the spacing, and only when it actually runs', () => {
     expect(CODEX_SMALL_ALLOWANCE_MODELS.has(effectiveCodexModel(' gpt-5.6-sol ').value)).toBe(true);
     expect(CODEX_SMALL_ALLOWANCE_MODELS.has(effectiveCodexModel('GPT-5.6-SOL').value)).toBe(false);
+    expect(CODEX_SMALL_ALLOWANCE_MODELS.has(effectiveCodexModel(' gpt-6-astra ').value)).toBe(true);
+    expect(CODEX_SMALL_ALLOWANCE_MODELS.has(effectiveCodexModel('GPT-6-SOL').value)).toBe(false);
   });
 
   it.each([

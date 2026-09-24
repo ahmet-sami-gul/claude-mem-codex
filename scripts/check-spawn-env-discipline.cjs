@@ -30,10 +30,11 @@
  *     must contain buildCodexObserverEnv. CodexCliInstaller.ts is exempt: it
  *     is claude-mem's Codex HOST integration, not the observer boundary.
  *   - codex-forbidden-arg: the strings --dangerously-bypass-approvals-and-sandbox,
- *     --dangerously-bypass-hook-trust, danger-full-access, '--last' (quoted)
- *     and --add-dir may appear only in src/services/worker/codex/codex-invocation.ts
- *     (where they are listed as forbidden). Checked on raw text (comments
- *     included) across src/ and scripts/ (this file excluded).
+ *     --dangerously-bypass-hook-trust, danger-full-access, '--last' (quoted),
+ *     --add-dir, --approve-for-me, --not-so-yolo and --yolo may appear only in
+ *     src/services/worker/codex/codex-invocation.ts (where they are listed as
+ *     forbidden). Checked on raw text (comments included) across src/ and
+ *     scripts/ (this file excluded).
  *
  * Pure CJS (no compile step) so it can run before tsc. Exposes findViolations
  * (all rules) plus the codex helpers for the bun test in
@@ -83,6 +84,9 @@ const CODEX_FORBIDDEN_STRINGS = [
   { label: 'danger-full-access', re: /danger-full-access/ },
   { label: "'--last'", re: /(['"`])--last\1/ },
   { label: '--add-dir', re: /--add-dir/ },
+  { label: '--approve-for-me', re: /--approve-for-me/ },
+  { label: '--not-so-yolo', re: /--not-so-yolo/ },
+  { label: '--yolo', re: /--yolo/ },
 ];
 
 // How many lines after a spawn match to inspect for the env: option.

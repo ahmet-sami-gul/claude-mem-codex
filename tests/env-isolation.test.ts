@@ -363,6 +363,9 @@ describe('codex spawn-env and forbidden-argument rules (plan 3.10)', () => {
       "const c = 'danger-full-access';",
       "const d = ['resume', '--last'];",
       "const e = '--add-dir';",
+      "const f = '--approve-for-me';",
+      "const g = '--not-so-yolo';",
+      "const h = '--yolo';",
     ];
     for (const file of ['src/services/worker/CodexProvider.ts', 'scripts/some-script.cjs', CODEX_FILE]) {
       const found = checkCodexSource(file, lines.join('\n')).filter((v) => v.rule === 'codex-forbidden-arg');
@@ -372,6 +375,9 @@ describe('codex spawn-env and forbidden-argument rules (plan 3.10)', () => {
         'danger-full-access',
         "'--last'",
         '--add-dir',
+        '--approve-for-me',
+        '--not-so-yolo',
+        '--yolo',
       ]);
     }
     expect(checkCodexSource('src/services/worker/codex/codex-invocation.ts', lines.join('\n'))).toEqual([]);

@@ -152,6 +152,12 @@ describe('CodexProviderFields — labels, hints and what the worker really uses'
     const spacedSelect = controlFor(spaced, 'Codex Model');
     expect(textOf(spaced, attr(spacedSelect, 'aria-describedby')!)).toContain('gpt-5.6-sol has a much smaller allowance');
 
+    for (const model of ['gpt-6-sol', 'gpt-6-astra']) {
+      const html = renderCodexFields({ CLAUDE_MEM_CODEX_MODEL: model });
+      expect(textOf(html, attr(controlFor(html, 'Codex Model'), 'aria-describedby')!)).toContain(`${model} has a much smaller allowance`);
+    }
+    expect(renderCodexFields({ CLAUDE_MEM_CODEX_MODEL: 'gpt-6-luna' })).not.toContain('much smaller allowance');
+
     // Upper case is not a valid id: the worker runs the default, not sol.
     const upper = renderCodexFields({ CLAUDE_MEM_CODEX_MODEL: 'GPT-5.6-SOL' });
     expect(upper).not.toContain('much smaller allowance');

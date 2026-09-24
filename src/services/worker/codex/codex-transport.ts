@@ -117,7 +117,7 @@ export interface CodexTodoObservation {
 export interface TurnResult {
   /** `thread.started.thread_id`; logged only, never persisted. */
   threadId: string | null;
-  /** `agent_message` texts from `item.completed`, joined with '\n'. */
+  /** The last `agent_message` text from `item.completed` (single-answer rule, codex-jsonl.ts). */
   text: string;
   /** Null when no `turn.completed` carried usage. */
   usage: CodexUsage | null;

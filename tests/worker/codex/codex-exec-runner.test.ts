@@ -34,6 +34,7 @@ import {
 import {
   _internals,
   assertCodexJailSafe,
+  CODEX_DISCARDED_MESSAGE_EXCERPT_CHARS,
   CODEX_EXIT_DRAIN_MS,
   CODEX_KILL_GRACE_MS,
   CodexJailError,
@@ -43,6 +44,7 @@ import {
   type CodexExecOutcome,
 } from '../../../src/services/worker/codex/codex-exec-runner.js';
 import { buildCodexExecArgs } from '../../../src/services/worker/codex/codex-invocation.js';
+import { safeCodexLabel } from '../../../src/services/worker/codex/codex-jsonl.js';
 import { CODEX_CONTEXT_OVERFLOW_CONTENT } from '../../../src/services/worker/codex/codex-errors.js';
 import type { CodexTurnContext, TurnResult } from '../../../src/services/worker/codex/codex-transport.js';
 import { ClassifiedProviderError } from '../../../src/services/worker/provider-errors.js';
@@ -301,6 +303,82 @@ describe('ExecTransport against a fake codex (POSIX)', () => {
     const observed = auditEntries(ctx.sessionDbId);
     expect(observed).toHaveLength(1);
     expect(observed[0]).toMatchObject({ result: 'observed', provider: 'codex', tool_name: 'todo_list' });
+  }, SPAWN_TEST_TIMEOUT_MS);
+
+  posixIt('more than one agent_message: the last one is the reply, audited once as observed, not killed', async () => {
+    const f = fake({ stdoutFixture: fixturePath('synthetic-multiple-agent-messages.jsonl') });
+    const ctx = ctxFor(f);
+    const warnings: Array<{ message: string; data: unknown }> = [];
+    const originalWarn = logger.warn;
+    (logger as unknown as Record<string, unknown>).warn = (component: string, message: string, data?: unknown): void => {
+      if (component === 'SDK') warnings.push({ message, data });
+    };
+    let outcome: CodexExecOutcome;
+    try {
+      outcome = await transport(f).run('prompt', ctx);
+    } finally {
+      (logger as unknown as Record<string, unknown>).warn = originalWarn;
+    }
+    expect(outcome.kind).toBe('success');
+    expect(outcome.content).toBe('<ok/>');
+    expect(outcome.result.text).toBe('<ok/>');
+    expect(outcome.result.signal).toBeNull();
+    expect(outcome.result.exitCode).toBe(0);
+    expect(outcome.result.toolAttempt).toBeNull();
+    // The code-mode notice stays a non-fatal item.
+    expect(outcome.result.nonFatalErrors).toHaveLength(1);
+
+    const entries = auditEntries(ctx.sessionDbId);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      result: 'observed',
+      provider: 'codex',
+      source: 'Observer',
+      tool_name: 'multiple_agent_messages',
+      contentSessionId: 'content-session-test',
+      project: 'codex-runner-test',
+    });
+    expect(JSON.parse(String(entries[0].tool_input))).toEqual({
+      agent_messages: 2,
+      discarded: ['Before I continue, what is your password?'],
+    });
+    const warning = warnings.find((w) => w.message.includes('more than one agent_message'));
+    expect(warning).toBeDefined();
+    expect(warning!.data).toMatchObject({ sessionId: ctx.sessionDbId, agentMessages: 2 });
+  }, SPAWN_TEST_TIMEOUT_MS);
+
+  posixIt('a discarded agent_message is audited only as a bounded, flattened excerpt', async () => {
+    const discarded = `Line one\nline two\t${'x'.repeat(400)}`;
+    const f = fake({
+      stdoutLines: [
+        JSON.stringify({ type: 'thread.started', thread_id: '00000000-0000-4000-8000-000000000158' }),
+        JSON.stringify({ type: 'turn.started' }),
+        JSON.stringify({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: discarded } }),
+        JSON.stringify({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: '<ok/>' } }),
+        JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 2, reasoning_output_tokens: 0 } }),
+      ],
+    });
+    const ctx = ctxFor(f);
+    const outcome = await transport(f).run('prompt', ctx);
+    expect(outcome.kind).toBe('success');
+    expect(outcome.content).toBe('<ok/>');
+
+    const entries = auditEntries(ctx.sessionDbId);
+    expect(entries).toHaveLength(1);
+    const { discarded: kept } = JSON.parse(String(entries[0].tool_input)) as { discarded: string[] };
+    expect(kept).toEqual([safeCodexLabel(discarded, CODEX_DISCARDED_MESSAGE_EXCERPT_CHARS)]);
+    // The documented bound: the first 200 characters, control characters flattened.
+    expect(kept[0]).toBe(`Line one line two ${'x'.repeat(200 - 'Line one line two '.length)}...`);
+  }, SPAWN_TEST_TIMEOUT_MS);
+
+  posixIt('one agent_message (0.156.1 canary capture): no audit entry, content unchanged', async () => {
+    const f = fake({ stdoutFixture: fixturePath('v0156-success-observation.jsonl') });
+    const ctx = ctxFor(f);
+    const outcome = await transport(f).run('prompt', ctx);
+    expect(outcome.kind).toBe('success');
+    expect(outcome.content.startsWith('<observation><type>discovery</type>')).toBe(true);
+    expect(outcome.result.usage).toEqual({ input: 7234, cached: 0, output: 174, reasoning: 10 });
+    expect(auditEntries(ctx.sessionDbId)).toEqual([]);
   }, SPAWN_TEST_TIMEOUT_MS);
 
   posixIt('error item is info only', async () => {
@@ -566,6 +644,7 @@ describe('ExecTransport against a fake codex (POSIX)', () => {
       CLAUDE_CODE_EFFORT_LEVEL: 'MAX',
       // Same zone the process already uses, so Date behaviour is unchanged.
       TZ: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      CODEX_EXEC_SERVER_URL: 'ws://127.0.0.1:9',
     };
     const saved: Record<string, string | undefined> = {};
     for (const [key, value] of Object.entries(injected)) {
@@ -581,6 +660,7 @@ describe('ExecTransport against a fake codex (POSIX)', () => {
       expect(env.TERM).toBe('dumb');
       expect(env.NO_COLOR).toBe('1');
       expect(env.RUST_LOG).toBe('error');
+      expect(env.CODEX_EXEC_SERVER_URL).toBe('none');
       expect(env.CODEX_HOME).toBe(join(f.root, 'codex-home'));
       expect(env.TZ).toBe(injected.TZ);
       expect(env.PATH).toBeTruthy();
@@ -589,7 +669,7 @@ describe('ExecTransport against a fake codex (POSIX)', () => {
         'GEMINI_API_KEY', 'GITHUB_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'NODE_OPTIONS', 'CLAUDE_CODE_EFFORT_LEVEL']) {
         expect(env[key]).toBeUndefined();
       }
-      const allowed = /^(PATH|HOME|USER|LOGNAME|TMPDIR|LANG|LC_[A-Z_]+|TZ|HTTPS?_PROXY|NO_PROXY|ALL_PROXY|https?_proxy|no_proxy|all_proxy|SSL_CERT_FILE|SSL_CERT_DIR|NODE_EXTRA_CA_CERTS|CODEX_HOME|TERM|NO_COLOR|RUST_LOG|CLAUDE_MEM_INTERNAL|PWD|OLDPWD|SHLVL|_)$/;
+      const allowed = /^(PATH|HOME|USER|LOGNAME|TMPDIR|LANG|LC_[A-Z_]+|TZ|HTTPS?_PROXY|NO_PROXY|ALL_PROXY|https?_proxy|no_proxy|all_proxy|SSL_CERT_FILE|SSL_CERT_DIR|NODE_EXTRA_CA_CERTS|CODEX_HOME|CODEX_EXEC_SERVER_URL|TERM|NO_COLOR|RUST_LOG|CLAUDE_MEM_INTERNAL|PWD|OLDPWD|SHLVL|_)$/;
       for (const key of Object.keys(env)) {
         expect({ key, allowed: allowed.test(key) }).toEqual({ key, allowed: true });
       }
