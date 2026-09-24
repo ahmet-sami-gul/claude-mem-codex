@@ -21,7 +21,8 @@ import {
  * This route is UNAUTHENTICATED and reachable from any page the user has open,
  * and the settings behind it now decide how much of a paid ChatGPT plan the
  * observer may spend. So the coverage here is mostly about what must NOT be
- * writable: the provider switch itself, and the eight cost levers. A client
+ * writable: the provider switch itself, the eight cost levers, and the data
+ * directory, which would reset all of them at once. A client
  * may post the whole GET body back unchanged (the viewer did before it began
  * sending only what it may change), so the same rules also have to accept
  * every value the GET returned.
@@ -564,6 +565,8 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     ['CLAUDE_MEM_CODEX_HOME', 42],
     ['CLAUDE_MEM_SUBAGENT_EVENTS', ['writes']],
     ['CLAUDE_MEM_SUBAGENT_EVENTS', { mode: 'writes' }],
+    ['CLAUDE_MEM_DATA_DIR', 42],
+    ['CLAUDE_MEM_DATA_DIR', null],
   ])('saves unrelated settings while settings.json holds %s = %p', (key, value) => {
     writeFileSync(
       settingsPath,
@@ -609,5 +612,80 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
       CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS: '2',
       CLAUDE_MEM_CODEX_TIMEOUT_MS: '5',
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // CLAUDE_MEM_DATA_DIR is file/env only, and no other value is accepted.
+  // resolveDataDir reads it from ~/.claude-mem/settings.json, so a POST that
+  // wrote '/tmp/x' would start the next worker on /tmp/x/settings.json, seeded
+  // with defaults: every file/env-only key above back at its default and the
+  // provider back at 'claude'.
+  //
+  // tests/preload.ts pins the variable to this run's temp dir, so GET (and the
+  // route's "unchanged" check) reports that value, while the file holds
+  // FILE_DATA_DIR.
+  // -------------------------------------------------------------------------
+
+  const FILE_DATA_DIR = '/Users/someone/claude-mem-data';
+
+  it.each([
+    ['/tmp/x'],
+    ['~/elsewhere'],
+    [''],
+    [42],
+    [null],
+    [['/tmp/x']],
+    [{ path: '/tmp/x' }],
+  ])('refuses to move the data directory to %p over the API and writes nothing', value => {
+    persist({ CLAUDE_MEM_DATA_DIR: FILE_DATA_DIR });
+    handlers = captureHandlers(new SettingsRoutes({} as any));
+    const before = readFileSync(settingsPath, 'utf-8');
+
+    const { statusSpy, jsonSpy } = post({ CLAUDE_MEM_DATA_DIR: value, CLAUDE_MEM_CONTEXT_OBSERVATIONS: '60' });
+
+    expect(statusSpy).toHaveBeenCalledWith(400);
+    expect(jsonSpy).toHaveBeenCalledWith({
+      success: false,
+      error: 'CLAUDE_MEM_DATA_DIR can only be changed in settings.json or the environment, not over the API',
+    });
+    // The whole request is refused, not just the key.
+    expect(readFileSync(settingsPath, 'utf-8')).toBe(before);
+  });
+
+  it('accepts the stored CLAUDE_MEM_DATA_DIR back, but never copies it into settings.json', () => {
+    const envDataDir = process.env.CLAUDE_MEM_DATA_DIR;
+    expect(envDataDir).toBeTruthy();
+    expect(envDataDir).not.toBe(FILE_DATA_DIR);
+    persist({ CLAUDE_MEM_DATA_DIR: FILE_DATA_DIR });
+    handlers = captureHandlers(new SettingsRoutes({} as any));
+    const read = createMockReqRes({});
+    handlers.get(read.req as Request, read.res as Response);
+    const body = read.jsonSpy.mock.calls[0][0] as Record<string, unknown>;
+    // GET reports the environment's value...
+    expect(body.CLAUDE_MEM_DATA_DIR).toBe(envDataDir);
+
+    // ...and a client that posts the GET body back (as the viewer once did) keeps saving.
+    const { jsonSpy, statusSpy } = post({ ...body, CLAUDE_MEM_CONTEXT_OBSERVATIONS: '60' });
+
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(jsonSpy).toHaveBeenCalledWith({ success: true, message: 'Settings updated successfully' });
+    expect(persisted().CLAUDE_MEM_CONTEXT_OBSERVATIONS).toBe('60');
+    // Not written: removing the variable must bring back the file's own directory.
+    expect(persisted().CLAUDE_MEM_DATA_DIR).toBe(FILE_DATA_DIR);
+  });
+
+  it('never sends CLAUDE_MEM_DATA_DIR from the modal, even when the form holds another value', () => {
+    persist({ CLAUDE_MEM_DATA_DIR: FILE_DATA_DIR });
+    handlers = captureHandlers(new SettingsRoutes({} as any));
+    const fromGet = viewerRoundTripBody();
+    const body = buildSettingsSaveBody({ ...fromGet, CLAUDE_MEM_DATA_DIR: '/tmp/x', CLAUDE_MEM_CONTEXT_OBSERVATIONS: '60' }, fromGet);
+    expect('CLAUDE_MEM_DATA_DIR' in body).toBe(false);
+
+    const { jsonSpy, statusSpy } = post(body);
+
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(jsonSpy).toHaveBeenCalledWith({ success: true, message: 'Settings updated successfully' });
+    expect(persisted().CLAUDE_MEM_CONTEXT_OBSERVATIONS).toBe('60');
+    expect(persisted().CLAUDE_MEM_DATA_DIR).toBe(FILE_DATA_DIR);
   });
 });

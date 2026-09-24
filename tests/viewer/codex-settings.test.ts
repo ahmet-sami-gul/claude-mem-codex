@@ -142,8 +142,8 @@ describe('viewer codex constants mirror the worker', () => {
     expect(CODEX_FILE_ONLY_KEYS).toHaveLength(8);
   });
 
-  it('treats CLAUDE_MEM_SUBAGENT_EVENTS, which the route never writes, as file/env only too', () => {
-    expect([...OTHER_FILE_ONLY_KEYS]).toEqual(['CLAUDE_MEM_SUBAGENT_EVENTS']);
+  it('treats CLAUDE_MEM_SUBAGENT_EVENTS and CLAUDE_MEM_DATA_DIR, which the route never writes, as file/env only too', () => {
+    expect([...OTHER_FILE_ONLY_KEYS]).toEqual(['CLAUDE_MEM_SUBAGENT_EVENTS', 'CLAUDE_MEM_DATA_DIR']);
     const source = readFileSync(join(import.meta.dir, '../../src/services/worker/http/routes/SettingsRoutes.ts'), 'utf-8');
     const list = source.match(/const settingKeys = \[([\s\S]*?)\];/);
     expect(list).not.toBeNull();
@@ -231,15 +231,17 @@ describe('buildSettingsSaveBody', () => {
     CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS: '300000',
     CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION: 'false',
     CLAUDE_MEM_SUBAGENT_EVENTS: 'writes',
+    CLAUDE_MEM_DATA_DIR: '/Users/someone/.claude-mem',
   } as Record<string, unknown>;
 
-  it('never sends the eight file/env-only codex keys or CLAUDE_MEM_SUBAGENT_EVENTS, changed or not', () => {
+  it('never sends the eight file/env-only codex keys, CLAUDE_MEM_SUBAGENT_EVENTS or CLAUDE_MEM_DATA_DIR, changed or not', () => {
     const body = buildSettingsSaveBody(
       {
         ...persisted,
         CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '0',
         CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '50',
         CLAUDE_MEM_SUBAGENT_EVENTS: 'all',
+        CLAUDE_MEM_DATA_DIR: '/tmp/x',
       },
       persisted,
     );

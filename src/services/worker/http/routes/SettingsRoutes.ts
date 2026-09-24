@@ -140,6 +140,14 @@ export class SettingsRoutes extends BaseRouteHandler {
     // CLAUDE_MEM_SUBAGENT_EVENTS is file/env only for the same reason: from
     // 'writes' or 'none', a page could set 'all' and send every subagent tool
     // use to the observer again.
+    //
+    // CLAUDE_MEM_DATA_DIR is file/env only because it undoes all of the above
+    // at once. resolveDataDir reads it from ~/.claude-mem/settings.json, so a
+    // page that wrote '/tmp/x' here would start the next worker on
+    // /tmp/x/settings.json, seeded with defaults: every file/env-only key
+    // above would be back at its default (no exec cap, subagent events 'all')
+    // and CLAUDE_MEM_PROVIDER at 'claude'. validateSettings refuses any value
+    // other than the one already stored.
     const settingKeys = [
       'CLAUDE_MEM_MODEL',
       'CLAUDE_MEM_CONTEXT_OBSERVATIONS',
@@ -155,7 +163,6 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_OPENROUTER_MODEL',
       'CLAUDE_MEM_OPENROUTER_SITE_URL',
       'CLAUDE_MEM_OPENROUTER_APP_NAME',
-      'CLAUDE_MEM_DATA_DIR',
       'CLAUDE_MEM_LOG_LEVEL',
       'CLAUDE_MEM_PYTHON_VERSION',
       'CLAUDE_CODE_PATH',
@@ -277,6 +284,21 @@ export class SettingsRoutes extends BaseRouteHandler {
       && !(SUBAGENT_EVENTS_MODES as readonly unknown[]).includes(subagentEvents)
     ) {
       return { valid: false, error: `CLAUDE_MEM_SUBAGENT_EVENTS must be one of: ${SUBAGENT_EVENTS_MODES.join(', ')}` };
+    }
+
+    // File/env only (never written here). Unlike the keys above, no other
+    // value is valid over the API: there is no safe data directory to accept
+    // and drop, and a caller that asked to move it should hear that it did
+    // not. The value already stored (what GET returned) is accepted, so a
+    // client posting the GET body back keeps working.
+    if (
+      settings.CLAUDE_MEM_DATA_DIR !== undefined
+      && settings.CLAUDE_MEM_DATA_DIR !== persisted.CLAUDE_MEM_DATA_DIR
+    ) {
+      return {
+        valid: false,
+        error: 'CLAUDE_MEM_DATA_DIR can only be changed in settings.json or the environment, not over the API',
+      };
     }
 
     if (settings.CLAUDE_MEM_CLAUDE_AUTH_METHOD) {

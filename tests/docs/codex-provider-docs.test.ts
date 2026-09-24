@@ -276,6 +276,26 @@ describe('docs/public/configuration.mdx CLAUDE_MEM_SUBAGENT_EVENTS row', () => {
   });
 });
 
+describe('CLAUDE_MEM_DATA_DIR is documented as file/env only', () => {
+  it('is off the route write allowlist and named in the file/env-only bullet', () => {
+    expect(routeWriteAllowlist().has('CLAUDE_MEM_DATA_DIR')).toBe(false);
+    // The viewer-never-sends check in the CLAUDE_MEM_SUBAGENT_EVENTS test above covers this key too.
+    const bullet = codexPage.split('\n').find(line => line.startsWith('- **File or environment only:**'));
+    expect(bullet).toContain('`CLAUDE_MEM_DATA_DIR`');
+    expect(bullet).toContain('for `CLAUDE_MEM_DATA_DIR` it refuses every other value');
+    expect(codexPage).toContain('relax a check, or move the data directory.');
+  });
+
+  it('says so in every configuration.mdx row and in Custom Data Directory', () => {
+    const rows = configurationPage.split('\n').filter(line => line.startsWith('| `CLAUDE_MEM_DATA_DIR`'));
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row).toContain('**File/env only**');
+    const section = configurationPage.slice(configurationPage.indexOf('### Custom Data Directory'));
+    expect(section).toContain('The data directory is **file/env only**');
+    expect(section).toContain('refuses any value other than the one already stored');
+  });
+});
+
 describe('docs navigation', () => {
   it('lists the codex page right after the gemini page', () => {
     const pages: string[] = JSON.parse(read('docs/public/docs.json')).navigation.groups

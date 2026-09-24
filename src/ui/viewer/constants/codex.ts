@@ -119,10 +119,13 @@ export const CODEX_FILE_ONLY_KEYS: readonly string[] = [
 
 /**
  * File/env-only keys outside the CLAUDE_MEM_CODEX_* family, left out of every
- * save for the same reasons. CLAUDE_MEM_SUBAGENT_EVENTS has no field in the
- * modal, but GET returns it, so the form would otherwise carry it back.
+ * save for the same reasons. Neither has a field in the modal, but GET returns
+ * both, so the form would otherwise carry them back. For CLAUDE_MEM_DATA_DIR
+ * that matters twice over: the route refuses any value but the stored one,
+ * and GET reports the worker's environment, so a worker started with
+ * CLAUDE_MEM_DATA_DIR set would otherwise have it copied into settings.json.
  */
-export const OTHER_FILE_ONLY_KEYS: readonly string[] = ['CLAUDE_MEM_SUBAGENT_EVENTS'];
+export const OTHER_FILE_ONLY_KEYS: readonly string[] = ['CLAUDE_MEM_SUBAGENT_EVENTS', 'CLAUDE_MEM_DATA_DIR'];
 
 /**
  * The body the modal POSTs: the form, minus what it must not send back.
@@ -135,7 +138,8 @@ export const OTHER_FILE_ONLY_KEYS: readonly string[] = ['CLAUDE_MEM_SUBAGENT_EVE
  * check reads the same env-applied value, so it accepts the copy. So:
  *
  *   - the eight file/env-only codex keys are never sent (CODEX_FILE_ONLY_KEYS),
- *     nor is CLAUDE_MEM_SUBAGENT_EVENTS (OTHER_FILE_ONLY_KEYS);
+ *     nor are CLAUDE_MEM_SUBAGENT_EVENTS and CLAUDE_MEM_DATA_DIR
+ *     (OTHER_FILE_ONLY_KEYS);
  *   - CLAUDE_MEM_PROVIDER and every other CLAUDE_MEM_CODEX_* key is sent only
  *     when the user changed it from what GET returned (`persisted`).
  *
