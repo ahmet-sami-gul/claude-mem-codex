@@ -3,7 +3,7 @@ import express, { Request, Response } from 'express';
 import { z } from 'zod';
 import path from 'path';
 import { readFileSync, existsSync, renameSync, mkdirSync } from 'fs';
-import { getPackageRoot, paths, expandTilde } from '../../../../shared/paths.js';
+import { getPackageRoot, paths } from '../../../../shared/paths.js';
 import { logger } from '../../../../utils/logger.js';
 import { SettingsManager } from '../../SettingsManager.js';
 import { ModeManager } from '../../../domain/ModeManager.js';
@@ -90,6 +90,19 @@ export class SettingsRoutes extends BaseRouteHandler {
   });
 
   private handleUpdateSettings = this.wrapHandler((req: Request, res: Response): void => {
+    // express.json() leaves req.body undefined for a body that is not
+    // application/json (a page can POST text/plain without a CORS preflight),
+    // and hands a JSON array through as is. Neither is a settings object.
+    // Refused before validateSettings, whose read of settings.json creates the
+    // file when it is missing.
+    if (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body)) {
+      res.status(400).json({
+        success: false,
+        error: 'The request body must be a JSON object of settings',
+      });
+      return;
+    }
+
     const validation = this.validateSettings(req.body);
     if (!validation.valid) {
       res.status(400).json({
@@ -148,6 +161,14 @@ export class SettingsRoutes extends BaseRouteHandler {
     // above would be back at its default (no exec cap, subagent events 'all')
     // and CLAUDE_MEM_PROVIDER at 'claude'. validateSettings refuses any value
     // other than the one already stored.
+    //
+    // CLAUDE_CODE_PATH and CLAUDE_MEM_CLAUDE_CONFIG_DIR are file/env only for
+    // the reason CLAUDE_MEM_CODEX_PATH / _HOME are. findClaudeExecutable runs
+    // the binary CLAUDE_CODE_PATH names (its version probe) and every Claude
+    // SDK spawn then uses it, KnowledgeAgent's too whatever the provider; the
+    // config dir picks which local Claude login those spawns use. The viewer
+    // has no field for either. validateSettings refuses any value other than
+    // the one already stored, as for CLAUDE_MEM_DATA_DIR.
     const settingKeys = [
       'CLAUDE_MEM_MODEL',
       'CLAUDE_MEM_CONTEXT_OBSERVATIONS',
@@ -165,8 +186,6 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_OPENROUTER_APP_NAME',
       'CLAUDE_MEM_LOG_LEVEL',
       'CLAUDE_MEM_PYTHON_VERSION',
-      'CLAUDE_CODE_PATH',
-      'CLAUDE_MEM_CLAUDE_CONFIG_DIR',
       'CLAUDE_MEM_CONTEXT_SHOW_READ_TOKENS',
       'CLAUDE_MEM_CONTEXT_SHOW_WORK_TOKENS',
       'CLAUDE_MEM_CONTEXT_SHOW_SAVINGS_AMOUNT',
@@ -200,14 +219,6 @@ export class SettingsRoutes extends BaseRouteHandler {
       }
     }
 
-    // Persist CLAUDE_CODE_PATH with any leading `~` expanded: it's fed straight
-    // to existsSync/posix_spawn (no shell), where a literal `~` fails with
-    // ENOENT and silently breaks all memory capture. Store the resolved path so
-    // the resolver never sees the tilde.
-    if (typeof settings.CLAUDE_CODE_PATH === 'string' && settings.CLAUDE_CODE_PATH) {
-      settings.CLAUDE_CODE_PATH = expandTilde(settings.CLAUDE_CODE_PATH);
-    }
-
     writeJsonFileAtomic(settingsPath, settings);
 
     clearPortCache();
@@ -235,10 +246,25 @@ export class SettingsRoutes extends BaseRouteHandler {
     // key this route will not actually write.
     const persisted = this.loadPersistedSettings();
 
-    if (settings.CLAUDE_MEM_PROVIDER) {
-    const validProviders = ['claude', 'gemini', 'openrouter', 'codex'];
-    if (!validProviders.includes(settings.CLAUDE_MEM_PROVIDER)) {
-      return { valid: false, error: 'CLAUDE_MEM_PROVIDER must be "claude", "gemini", "openrouter", or "codex"' };
+    /**
+     * The body carries `key` with a value other than the one already stored.
+     *
+     * Presence, not truthiness, for the keys that select a provider, a login
+     * or the worker's bind: the write loop persists every value that is not
+     * undefined, so a `''`, `null`, `0` or `false` that skipped a truthy check
+     * was written as is. Over a persisted 'codex' that switched observation to
+     * Claude at once (dispatch checks === 'codex'), and an empty or non-string
+     * CLAUDE_MEM_WORKER_HOST makes listen() bind every interface. The value
+     * already stored is accepted unchanged, so a client posting the GET body
+     * back keeps saving whatever the file holds.
+     */
+    const changed = (key: string): boolean =>
+      settings[key] !== undefined && settings[key] !== persisted[key];
+
+    if (changed('CLAUDE_MEM_PROVIDER')) {
+      const validProviders = ['claude', 'gemini', 'openrouter', 'codex'];
+      if (typeof settings.CLAUDE_MEM_PROVIDER !== 'string' || !validProviders.includes(settings.CLAUDE_MEM_PROVIDER)) {
+        return { valid: false, error: 'CLAUDE_MEM_PROVIDER must be "claude", "gemini", "openrouter", or "codex"' };
       }
       // Switching TO codex is file/env only. This endpoint is unauthenticated
       // and reachable from any page the user has open (middleware.ts allows
@@ -301,7 +327,22 @@ export class SettingsRoutes extends BaseRouteHandler {
       };
     }
 
-    if (settings.CLAUDE_MEM_CLAUDE_AUTH_METHOD) {
+    // File/env only (never written here), refused like CLAUDE_MEM_DATA_DIR:
+    // one names the binary every Claude SDK spawn runs, the other which local
+    // Claude login those spawns use (see the write allowlist). The value
+    // already stored is accepted, so a client posting the GET body back keeps
+    // working.
+    for (const key of ['CLAUDE_CODE_PATH', 'CLAUDE_MEM_CLAUDE_CONFIG_DIR'] as const) {
+      if (changed(key)) {
+        return {
+          valid: false,
+          error: `${key} can only be changed in settings.json or the environment, not over the API`,
+        };
+      }
+    }
+
+    // Part of the provider choice, and empty is not one of its values.
+    if (changed('CLAUDE_MEM_CLAUDE_AUTH_METHOD')) {
       const validClaudeAuthMethods = ['subscription', 'api-key', 'gateway', 'cli'];
       if (!validClaudeAuthMethods.includes(settings.CLAUDE_MEM_CLAUDE_AUTH_METHOD)) {
         return { valid: false, error: 'CLAUDE_MEM_CLAUDE_AUTH_METHOD must be "subscription", "api-key", "gateway", or "cli"' };
@@ -322,20 +363,25 @@ export class SettingsRoutes extends BaseRouteHandler {
       }
     }
 
-    if (settings.CLAUDE_MEM_WORKER_PORT) {
+    // An empty port is not "the default": getWorkerPort's parseInt makes it
+    // NaN, which listen() refuses, and 0 would bind a random port.
+    if (changed('CLAUDE_MEM_WORKER_PORT')) {
       const port = parseInt(settings.CLAUDE_MEM_WORKER_PORT, 10);
       if (isNaN(port) || port < 1024 || port > 65535) {
         return { valid: false, error: 'CLAUDE_MEM_WORKER_PORT must be between 1024 and 65535' };
       }
     }
 
-    if (settings.CLAUDE_MEM_WORKER_HOST) {
+    if (changed('CLAUDE_MEM_WORKER_HOST')) {
       const host = settings.CLAUDE_MEM_WORKER_HOST;
       // Loopback, plus the documented bind-all addresses used by Observation TV
       // and Docker (docs/public/configuration.mdx). Arbitrary IPv4 used to be
       // accepted and would expose the unauthenticated worker API on that NIC.
+      // A string only: RegExp.test coerces, so ['127.0.0.1'] would match, and
+      // listen() ignores a host that is not a non-empty string and binds every
+      // interface.
       const validHostPattern = /^(127\.0\.0\.1|0\.0\.0\.0|::1|::|localhost)$/;
-      if (!validHostPattern.test(host)) {
+      if (typeof host !== 'string' || !validHostPattern.test(host)) {
         return { valid: false, error: 'CLAUDE_MEM_WORKER_HOST must be a loopback address (127.0.0.1, ::1, localhost) or a bind-all address (0.0.0.0, ::) for Observation TV / Docker' };
       }
     }
@@ -351,21 +397,6 @@ export class SettingsRoutes extends BaseRouteHandler {
       const pythonVersionRegex = /^3\.\d{1,2}$/;
       if (!pythonVersionRegex.test(settings.CLAUDE_MEM_PYTHON_VERSION)) {
         return { valid: false, error: 'CLAUDE_MEM_PYTHON_VERSION must be in format "3.X" or "3.XX" (e.g., "3.13")' };
-      }
-    }
-
-    // #2753 — CLAUDE_MEM_CLAUDE_CONFIG_DIR controls which keychain identity's
-    // OAuth token gets read (oauth-token.ts's deriveMacKeychainServiceName)
-    // and which CLAUDE_CONFIG_DIR gets stamped onto every spawned SDK
-    // subprocess (EnvManager.ts's buildIsolatedEnv), so — unlike most of this
-    // whitelist — a malformed value here has spawn/auth-identity consequences,
-    // not just a rejected form field. Empty string is valid (the documented
-    // "fall through to default" sentinel); a present value must be a
-    // non-empty-after-trim string so a type-confused payload (number, array,
-    // object) can't reach path.join/createHash downstream.
-    if (settings.CLAUDE_MEM_CLAUDE_CONFIG_DIR !== undefined && settings.CLAUDE_MEM_CLAUDE_CONFIG_DIR !== '') {
-      if (typeof settings.CLAUDE_MEM_CLAUDE_CONFIG_DIR !== 'string' || !settings.CLAUDE_MEM_CLAUDE_CONFIG_DIR.trim()) {
-        return { valid: false, error: 'CLAUDE_MEM_CLAUDE_CONFIG_DIR must be a non-empty path string, or "" to use the default' };
       }
     }
 

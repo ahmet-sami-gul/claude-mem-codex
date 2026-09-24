@@ -356,8 +356,8 @@ export function findClaudeExecutable(logComponent: Component = 'SDK'): string {
     // convention, but nothing here runs through a shell — existsSync and
     // posix_spawn take the string verbatim, so a literal `~` fails with ENOENT.
     // Expand it defensively at read time so both the existence check and every
-    // probe spawn see a real absolute path (SettingsRoutes also normalizes on
-    // write; this covers files edited by hand).
+    // probe spawn see a real absolute path. The settings API never writes this
+    // key (file/env only), so this is the only place a `~` is expanded.
     const configuredPath = expandTilde(settings.CLAUDE_CODE_PATH, _internals.homedir());
     const describedPath = describeConfiguredPath(settings.CLAUDE_CODE_PATH, configuredPath);
     if (!_internals.existsSync(configuredPath)) {

@@ -49,10 +49,10 @@ export function sanitizeMacOsKeychainAccount(username: string): string {
  * default (~/.claude). `paths.CLAUDE_CONFIG_DIR` already folds in
  * process.env/default, so once the setting is empty this just returns that.
  *
- * The setting is human-typed (settings.json, or POSTed through the settings
- * HTTP route), so a leading `~` is expanded the same way every other
- * user-typed path setting in this codebase already is (CLAUDE_CODE_PATH via
- * SettingsRoutes, CLAUDE_MEM_DATA_DIR via paths.ts's resolveDataDir) —
+ * The setting is human-typed (settings.json or the environment; the settings
+ * HTTP route never writes it), so a leading `~` is expanded the same way every
+ * other user-typed path setting in this codebase already is (CLAUDE_CODE_PATH
+ * via findClaudeExecutable, CLAUDE_MEM_DATA_DIR via paths.ts's resolveDataDir) —
  * otherwise a literal `~` reaches sha256() unexpanded in
  * deriveMacKeychainServiceName, producing a suffix that never matches the
  * real keychain entry Claude Code stores under the expanded absolute path.

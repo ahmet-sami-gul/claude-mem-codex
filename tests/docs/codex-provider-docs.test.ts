@@ -296,6 +296,44 @@ describe('CLAUDE_MEM_DATA_DIR is documented as file/env only', () => {
   });
 });
 
+describe('CLAUDE_CODE_PATH and CLAUDE_MEM_CLAUDE_CONFIG_DIR are documented as file/env only', () => {
+  const CLAUDE_KEYS = ['CLAUDE_CODE_PATH', 'CLAUDE_MEM_CLAUDE_CONFIG_DIR'];
+
+  it('are off the route write allowlist, never sent by the viewer, and named in the file/env-only bullet', () => {
+    const bullet = codexPage.split('\n').find(line => line.startsWith('- **File or environment only:**'));
+    for (const key of CLAUDE_KEYS) {
+      expect(routeWriteAllowlist().has(key)).toBe(false);
+      expect(key in buildSettingsSaveBody({ [key]: 'changed' }, { [key]: 'stored' })).toBe(false);
+      expect(bullet).toContain(`\`${key}\``);
+    }
+    expect(bullet).toContain('and so it does for `CLAUDE_CODE_PATH` and `CLAUDE_MEM_CLAUDE_CONFIG_DIR`');
+    expect(bullet).toContain('the Claude binary and login also serve the knowledge agent, whatever the provider');
+    expect(codexPage).toContain('change the Codex or Claude binary or login, relax a check, or move the data directory.');
+  });
+
+  it('say so, with the reason, in their configuration.mdx rows', () => {
+    const [, , codePath] = tableRow(configurationPage, 'CLAUDE_CODE_PATH');
+    expect(codePath).toContain('**File/env only**: claude-mem runs this binary');
+    const [, , configDir] = tableRow(configurationPage, 'CLAUDE_MEM_CLAUDE_CONFIG_DIR');
+    expect(configDir).toContain('**File/env only**: it decides which Claude login the SDK uses');
+    for (const cell of [codePath, configDir]) {
+      expect(cell).toContain('refuses any value other than the one already stored');
+    }
+  });
+});
+
+describe('the provider rule covers empty and non-string values', () => {
+  it('says so under "Who can change what"', () => {
+    const section = codexPage.slice(codexPage.indexOf('### Who can change what'), codexPage.indexOf('## The lockdown'));
+    expect(section).toContain('The provider rule covers every value the API is sent, not only `codex`.');
+    expect(section).toContain('an empty string, `null`, a number, `false`, an array or an object is refused and nothing is written, unless it is exactly the value already stored.');
+    // The route accepts a body value equal to the stored one even when that is
+    // '' or null (settings-routes-presence.test.ts), so the doc must not claim
+    // such values are refused whatever is stored.
+    expect(section).not.toContain('whatever provider is stored');
+  });
+});
+
 describe('docs navigation', () => {
   it('lists the codex page right after the gemini page', () => {
     const pages: string[] = JSON.parse(read('docs/public/docs.json')).navigation.groups
