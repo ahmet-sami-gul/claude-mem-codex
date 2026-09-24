@@ -122,11 +122,32 @@ describe('CodexProviderFields — labels, hints and what the worker really uses'
     expect(html).not.toContain('form-field-warning');
   });
 
+  it('describes batching as grouped by prompt, agent and cwd, not as consecutive tool uses', () => {
+    const html = renderCodexFields({});
+    expect(html).toContain('Tool uses from the same prompt, agent and working directory sent in one Codex call, oldest first');
+    expect(html).not.toContain('Consecutive tool uses');
+  });
+
   it('shows no binary-path field and the exec cap read-only', () => {
     const html = renderCodexFields({ CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '150' });
     expect(html).not.toContain('CLAUDE_MEM_CODEX_PATH');
     expect(html).toContain('150 Codex calls per 5 hours');
     expect(html).toContain('settings.json or the');
+  });
+
+  it('shows the waiting-observation cap read-only, and what the worker uses for a bad value', () => {
+    const html = renderCodexFields({ CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '800' });
+    expect(html).toContain('Max Waiting Observations per Session');
+    expect(html).toContain('800 waiting observations per session');
+    expect(html).toContain('set CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS in ~/.claude-mem/settings.json');
+    expect(html).not.toContain('form-field-warning');
+    // A bound, not a promise of few calls: 500 waiting can still be 125+ calls.
+    expect(html).toContain('at most this many tool uses per session are left to send');
+    expect(html).not.toContain('cannot turn into hundreds of Codex calls');
+
+    const tooLow = renderCodexFields({ CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '10' });
+    expect(tooLow).toContain('50 waiting observations per session');
+    expect(tooLow).toContain('the lowest cap is 50');
   });
 
   it('links a number error to its field', () => {

@@ -3,10 +3,12 @@
  *
  * The batch claim is what lets a provider pay for ONE turn per burst of tool
  * calls instead of one per call. Its guarantees are the ones pinned here:
- * FIFO with a hard stop at the first message that cannot join (so a summarize
- * request is never skipped), grouping by prompt/agent/cwd, count and character
- * budgets, a linger only while the queue is idle, and a claimed set that the
- * existing confirm/reset calls act on as a whole.
+ * grouping by prompt/agent/cwd, with other groups' observations (parallel
+ * subagents) skipped and left queued in order; a hard stop at a summarize
+ * request, which is never skipped; queue order kept within a group, even when
+ * the character budget ends it; count and character budgets; a linger only
+ * while the queue is idle; and a claimed set that the existing confirm/reset
+ * calls act on as a whole.
  */
 
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
@@ -119,17 +121,91 @@ describe('SessionManager.claimObservationBatch', () => {
     ['agent id', { agentId: 'sub-1' }],
     ['agent type', { agentType: 'explorer' }],
     ['working directory', { cwd: '/other' }],
-  ] as const)('ends the batch at an observation with a different %s', async (_label, different) => {
+  ] as const)('skips an observation with a different %s and leaves it queued', async (_label, different) => {
     await sm.queueObservation(SESSION, obsData({ tool_name: 'A' }));
     await sm.queueObservation(SESSION, obsData({ tool_name: 'B' }));
     await sm.queueObservation(SESSION, obsData({ tool_name: 'X', ...different }));
     await sm.queueObservation(SESSION, obsData({ tool_name: 'D' }));
-    const { first } = await claimFirst(sm);
+    const { first, iterator } = await claimFirst(sm);
 
     const batch = await sm.claimObservationBatch(SESSION, first, NO_LINGER);
 
-    // FIFO: D matches A, but it is behind X, so it is not taken.
-    expect(batch.map(m => m.tool_name)).toEqual(['A', 'B']);
+    // D matches A, so it joins; X belongs to another group and is never mixed in.
+    expect(batch.map(m => m.tool_name)).toEqual(['A', 'B', 'D']);
+    await sm.confirmClaimedMessages(SESSION);
+    expect((await iterator.next()).value?.tool_name).toBe('X');
+  });
+
+  it('batches interleaved parallel subagents by agent, each group in order (A1 B1 A2 B2 A3)', async () => {
+    const agentA = { agentId: 'agent-a', agentType: 'explorer' };
+    const agentB = { agentId: 'agent-b', agentType: 'explorer' };
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A1', ...agentA }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'B1', ...agentB }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A2', ...agentA }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'B2', ...agentB }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A3', ...agentA }));
+    const { first, iterator } = await claimFirst(sm);
+
+    const batchA = await sm.claimObservationBatch(SESSION, first, NO_LINGER);
+    expect(batchA.map(m => m.tool_name)).toEqual(['A1', 'A2', 'A3']);
+    expect(sm.getSession(SESSION)!.claimedMessageIds).toEqual(batchA.map(m => m._persistentId));
+    expect(await sm.confirmClaimedMessages(SESSION)).toBe(3);
+
+    // The skipped group went nowhere: the drain yields it next, oldest first.
+    const next = await iterator.next();
+    expect(next.value?.tool_name).toBe('B1');
+    const batchB = await sm.claimObservationBatch(SESSION, next.value!, NO_LINGER);
+    expect(batchB.map(m => m.tool_name)).toEqual(['B1', 'B2']);
+    expect(sm.getMessageBuffer().getUnclaimedCount(SESSION)).toBe(0);
+  });
+
+  it('never claims past a summarize request, even for its own group (A1 B1 S A2)', async () => {
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A1' }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'B1', agentId: 'sub-b' }));
+    await sm.queueSummarize(SESSION, 'done');
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A2' }));
+    const { first, iterator } = await claimFirst(sm);
+
+    const batch = await sm.claimObservationBatch(SESSION, first, NO_LINGER);
+
+    expect(batch.map(m => m.tool_name)).toEqual(['A1']);
+    await sm.confirmClaimedMessages(SESSION);
+    // Queue order kept: B1, then the summarize, then A2.
+    expect((await iterator.next()).value?.tool_name).toBe('B1');
+    await sm.confirmClaimedMessages(SESSION);
+    expect((await iterator.next()).value?.type).toBe('summarize');
+  });
+
+  it('keeps order within the group: an observation over the budget ends it, a later one never jumps ahead (A1 A2big A3)', async () => {
+    const small = { tool_input: { v: 'x'.repeat(100) } };
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A1', ...small }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A2', tool_input: { v: 'x'.repeat(5_000) } }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A3', ...small }));
+    const { first, iterator } = await claimFirst(sm);
+    const one = observationBatchChars(first);
+
+    // Room for A1 and A3, not for A2.
+    const batch = await sm.claimObservationBatch(SESSION, first, { ...NO_LINGER, maxChars: one * 2 + 10 });
+
+    expect(batch.map(m => m.tool_name)).toEqual(['A1']);
+    await sm.confirmClaimedMessages(SESSION);
+    expect((await iterator.next()).value?.tool_name).toBe('A2');
+  });
+
+  it('skips other groups while an over-budget observation of its own closes the group', async () => {
+    const small = { tool_input: { v: 'x'.repeat(100) } };
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A1', ...small }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'B1', agentId: 'sub-b', ...small }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A2', ...small }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A3', tool_input: { v: 'x'.repeat(5_000) } }));
+    await sm.queueObservation(SESSION, obsData({ tool_name: 'A4', ...small }));
+    const { first } = await claimFirst(sm);
+    const one = observationBatchChars(first);
+
+    const batch = await sm.claimObservationBatch(SESSION, first, { ...NO_LINGER, maxChars: one * 3 + 10 });
+
+    expect(batch.map(m => m.tool_name)).toEqual(['A1', 'A2']);
+    expect(sm.getMessageBuffer().getUnclaimedCount(SESSION)).toBe(3);
   });
 
   it('treats an empty and an absent grouping field as the same group', async () => {
@@ -234,6 +310,30 @@ describe('SessionManager.claimObservationBatch', () => {
       const batch = await sm.claimObservationBatch(SESSION, first, { maxMessages: 4, maxChars: 48_000, lingerMs: 5_000 });
       expect(batch).toEqual([first]);
       expect(wait).not.toHaveBeenCalled();
+    });
+
+    it('stops lingering as soon as something arrives that it cannot take', async () => {
+      // Parallel subagents: B1 (another agent) arrives first. The batch cannot
+      // take it, so it returns then instead of sitting out the linger for more
+      // of its own group; A2 is left for a later turn, behind B1.
+      await sm.queueObservation(SESSION, obsData({ tool_name: 'A1', agentId: 'agent-a' }));
+      const { first, iterator } = await claimFirst(sm);
+      const start = performance.now();
+      setTimeout(() => { void sm.queueObservation(SESSION, obsData({ tool_name: 'B1', agentId: 'agent-b' })); }, 20);
+      const a2Queued = new Promise<void>(resolve => {
+        setTimeout(() => { void sm.queueObservation(SESSION, obsData({ tool_name: 'A2', agentId: 'agent-a' })).then(() => resolve()); }, 100);
+      });
+
+      const batch = await sm.claimObservationBatch(SESSION, first, { maxMessages: 4, maxChars: 48_000, lingerMs: 2_000 });
+      const elapsed = performance.now() - start;
+      await a2Queued;
+
+      expect(batch.map(m => m.tool_name)).toEqual(['A1']);
+      expect(elapsed).toBeLessThan(100);
+      await sm.confirmClaimedMessages(SESSION);
+      expect((await iterator.next()).value?.tool_name).toBe('B1');
+      await sm.confirmClaimedMessages(SESSION);
+      expect((await iterator.next()).value?.tool_name).toBe('A2');
     });
 
     it('lingers while the queue is idle and takes the rest of a burst', async () => {
@@ -380,6 +480,38 @@ describe('SessionManager.claimObservationBatch: claim reset underneath a linger'
       const batch = await sm.claimObservationBatch(SESSION, first, { maxMessages: 4, maxChars: 48_000, lingerMs: 200 });
 
       expect(batch.map(m => m._persistentId)).toEqual([first._persistentId]);
+    } finally {
+      sm.getSession(SESSION)?.abortController.abort();
+      quiet.forEach(spy => spy.mockRestore());
+    }
+  });
+
+  it('never claims a later observation of the group ahead of the reset one', async () => {
+    const quiet = [
+      spyOn(logger, 'info').mockImplementation(() => {}),
+      spyOn(logger, 'debug').mockImplementation(() => {}),
+    ];
+    const sm = new SessionManager(makeDbManager());
+    sm.initializeSession(SESSION, 'prompt', 1);
+    try {
+      await sm.queueObservation(SESSION, obsData({ tool_name: 'A1' }));
+      const { first, iterator } = await claimFirst(sm);
+      // The reset and a same-group arrival land in the same tick: A1 is
+      // waiting again at the head of the queue, with A2 behind it.
+      setTimeout(() => {
+        void sm.resetProcessingToPending(SESSION);
+        void sm.queueObservation(SESSION, obsData({ tool_name: 'A2' }));
+      }, 10);
+
+      const batch = await sm.claimObservationBatch(SESSION, first, { maxMessages: 4, maxChars: 48_000, lingerMs: 200 });
+
+      expect(batch.map(m => m.tool_name)).toEqual(['A1']);
+      expect(sm.getSession(SESSION)!.claimedMessageIds).toEqual([]);
+      expect(sm.getMessageBuffer().getUnclaimedCount(SESSION)).toBe(2);
+      // The drain re-yields them in queue order: A1, then A2.
+      expect((await iterator.next()).value?.tool_name).toBe('A1');
+      await sm.confirmClaimedMessages(SESSION);
+      expect((await iterator.next()).value?.tool_name).toBe('A2');
     } finally {
       sm.getSession(SESSION)?.abortController.abort();
       quiet.forEach(spy => spy.mockRestore());

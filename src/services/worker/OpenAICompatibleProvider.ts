@@ -342,13 +342,15 @@ export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBas
   }
 
   /**
-   * How to batch consecutive observations into one turn (M4, plan hook 10), or
+   * How to batch same-group observations into one turn (M4, plan hook 10), or
    * null for one turn per observation.
    *
    * Default: null, i.e. exactly the old loop — the drain yields a message, it
    * is answered, confirmed, and the next one is yielded. With a policy, each
    * observation the drain yields is grown into a batch through
-   * SessionManager.claimObservationBatch (same prompt, agent and cwd; FIFO;
+   * SessionManager.claimObservationBatch (same prompt, agent and cwd, picked
+   * oldest first out of the interleaved queue — other groups are skipped and
+   * stay queued; never past a summarize, never out of order within the group;
    * count and character budgets; a short linger when the queue is idle), the
    * batch is sent as ONE turn built by buildObservationTurn, and the whole
    * claimed set is confirmed — or reset to pending — together.
@@ -578,8 +580,9 @@ export abstract class OpenAICompatibleProvider<TConfig extends ProviderConfigBas
       return;
     }
 
-    // Opt-in batching (M4): grow this observation into a batch of consecutive
-    // ones from the same prompt/agent/cwd. Every id claimed here joins
+    // Opt-in batching (M4): grow this observation into a batch of queued
+    // ones from the same prompt/agent/cwd, oldest first (other groups are
+    // skipped, never past a summarize). Every id claimed here joins
     // session.claimedMessageIds, so the store below confirms the whole batch
     // and any failure resets the whole batch to pending. Without a policy the
     // batch is just this message, exactly as before.

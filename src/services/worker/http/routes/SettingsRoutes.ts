@@ -125,10 +125,12 @@ export class SettingsRoutes extends BaseRouteHandler {
     // The same reasoning now covers the Codex COST levers, which are absent for
     // a sharper reason than secrecy: an unauthenticated local page could
     // otherwise spend the user's ChatGPT plan. CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H
-    // could be set to 0 (unlimited), CLAUDE_MEM_CODEX_PATH / _HOME could point
-    // the observer at another binary or another login, and _TRANSPORT,
-    // _QUOTA_RESERVE_PERCENT, _RATE_LIMIT_PROBE_MS and _ALLOW_UNTESTED_VERSION
-    // all relax a guard. Those seven are file/env only. What remains writable is
+    // could be set to 0 (unlimited), CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS to
+    // 50 (discarding nearly every waiting observation) or 0 (an unbounded
+    // backlog), CLAUDE_MEM_CODEX_PATH / _HOME could point the observer at
+    // another binary or another login, and _TRANSPORT, _QUOTA_RESERVE_PERCENT,
+    // _RATE_LIMIT_PROBE_MS and _ALLOW_UNTESTED_VERSION all relax a guard. Those
+    // eight are file/env only. What remains writable is
     // the tuning a viewer legitimately offers — effort, verbosity, the timeout,
     // the conversation and batch budgets, field compression, and the two model
     // keys, which validateSettings additionally pins to CODEX_MODEL_ALLOWLIST
@@ -415,7 +417,7 @@ export class SettingsRoutes extends BaseRouteHandler {
      * nothing about it. Every rule below accepts that case, for two reasons:
      * the viewer posts the WHOLE GET body back, so one out-of-range value in
      * settings.json would otherwise 400 every save — including saves of
-     * completely unrelated settings — and seven of these keys are file/env
+     * completely unrelated settings — and eight of these keys are file/env
      * only, so this route could not repair a value it refuses. The runtime is
      * already the lenient half of this pair: CodexProvider.getConfig warns and
      * clamps (or falls back), it does not reject.
@@ -481,6 +483,16 @@ export class SettingsRoutes extends BaseRouteHandler {
       const value = Number(settings.CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H);
       if (!Number.isInteger(value) || value < 0) {
         return 'CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H must be an integer of 0 or more (0 = no local cap)';
+      }
+    }
+
+    // 0 turns the queue cap off; any other cap is at least 50.
+    if (present('CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS') && !unchanged('CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS')) {
+      const typeError = mustBeString('CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS');
+      if (typeError) return typeError;
+      const value = Number(settings.CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS);
+      if (!Number.isInteger(value) || (value !== 0 && (value < 50 || value > 100000))) {
+        return 'CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS must be 0 (no cap) or an integer between 50 and 100000';
       }
     }
 

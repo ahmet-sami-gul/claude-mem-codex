@@ -14,6 +14,7 @@ import { Server } from '../../src/services/server/Server.js';
 import type { RouteHandler } from '../../src/services/server/Server.js';
 import { SessionRoutes } from '../../src/services/worker/http/routes/SessionRoutes.js';
 import { CodexProvider } from '../../src/services/worker/CodexProvider.js';
+import { SessionManager } from '../../src/services/worker/SessionManager.js';
 import * as providerDispatch from '../../src/services/worker/provider-dispatch.js';
 import { WorkerService } from '../../src/services/worker-service.js';
 import * as supervisorIndex from '../../src/supervisor/index.js';
@@ -63,6 +64,20 @@ describe('WorkerService — Codex wiring', () => {
     // The same instance, not a second one: the provider caches its lockdown
     // self-check state, so two instances would verify the binary twice.
     expect(codexAgentOf(routes)).toBe((worker as unknown as { codexAgent: CodexProvider }).codexAgent);
+  });
+
+  it('installs the codex observation queue cap on its session manager', () => {
+    const install = spyOn(SessionManager.prototype, 'setObservationQueueCap');
+    spies.push(install);
+
+    const wired = new WorkerService();
+
+    expect(install).toHaveBeenCalledTimes(1);
+    // A cheap cap reader (CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS), asked per enqueue.
+    const [cap] = install.mock.calls[0] as [() => number];
+    expect(typeof cap()).toBe('number');
+    const sessionManager = (wired as unknown as { sessionManager: SessionManager }).sessionManager;
+    expect((sessionManager as unknown as { observationQueueCap: unknown }).observationQueueCap).toBe(cap);
   });
 
   it('reports the codex auth method from the codex agent, including while it verifies', () => {

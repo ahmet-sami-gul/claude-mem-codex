@@ -7,8 +7,12 @@ import { getSupervisor } from '../../supervisor/index.js';
 import { telemetryBuffer } from '../telemetry/buffer.js';
 import { deliverSessionWrapup, type TelegramWrapupFormatter } from '../integrations/TelegramWrapupNotifier.js';
 import { renderObservationEnvelope } from '../../sdk/prompts.js';
+import { codexMetrics, type CodexMetrics } from './codex/codex-metrics.js';
 
 export const SESSION_END_WRAPUP_GRACE_MS = 5_000;
+
+/** After the first drop, a session's queue-cap warning repeats once per this many drops. */
+export const QUEUE_CAP_WARN_EVERY = 100;
 
 /**
  * How a provider that opts into observation batching (M4) wants its turns
@@ -75,6 +79,11 @@ export class SessionManager {
   private onPendingMutate?: () => void;
   private telegramWrapupFormatter: TelegramWrapupFormatter | null = null;
   private readonly buffer = new SessionMessageBuffer(() => this.onPendingMutate?.());
+  /** The observation queue cap in force right now; 0 = no cap. See setObservationQueueCap. */
+  private observationQueueCap: () => number = () => 0;
+  private queueCapMetrics: CodexMetrics = codexMetrics;
+  /** Observations each live session has lost to the queue cap, for the throttled warning. */
+  private readonly queueCapDrops = new Map<number, number>();
 
   constructor(dbManager: DatabaseManager) {
     this.dbManager = dbManager;
@@ -82,6 +91,22 @@ export class SessionManager {
 
   setOnPendingMutate(cb: () => void): void {
     this.onPendingMutate = cb;
+  }
+
+  /**
+   * Bound each session's queue of waiting observations
+   * (CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS). The buffer is RAM-only by
+   * design and would otherwise grow without limit while the observer is
+   * paused; left to drain, such a pile-up spends hundreds of plan messages at
+   * once. `cap` answers the cap in force right now — 0 while codex is not the
+   * provider or the cap is off — and is asked after every enqueued
+   * observation, so it must be cheap (the worker passes a briefly cached
+   * settings read). Drops are counted in `metrics`. Until this is called there
+   * is no cap.
+   */
+  setObservationQueueCap(cap: () => number, metrics: CodexMetrics = codexMetrics): void {
+    this.observationQueueCap = cap;
+    this.queueCapMetrics = metrics;
   }
 
   setTelegramWrapupFormatter(formatter: TelegramWrapupFormatter): void {
@@ -330,6 +355,32 @@ export class SessionManager {
       logger.info('QUEUE', `ENQUEUED | sessionDbId=${sessionDbId} | messageId=${messageId} | type=observation | tool=${toolSummary} | depth=${queueDepth}`, {
         sessionId: sessionDbId
       });
+      this.enforceObservationQueueCap(sessionDbId);
+    }
+  }
+
+  /**
+   * Drop the oldest unclaimed observations of a session past the queue cap
+   * (see setObservationQueueCap). Claimed (in-flight) work and summarize
+   * requests are never dropped. Warns the first time a session drops and then
+   * at most once per QUEUE_CAP_WARN_EVERY drops.
+   */
+  private enforceObservationQueueCap(sessionDbId: number): void {
+    const cap = this.observationQueueCap();
+    if (!(cap > 0)) return;
+    const dropped = this.buffer.dropOldestUnclaimedObservations(sessionDbId, cap);
+    if (dropped === 0) return;
+
+    this.queueCapMetrics.recordQueuedObservationsDropped(dropped);
+    const before = this.queueCapDrops.get(sessionDbId) ?? 0;
+    const total = before + dropped;
+    this.queueCapDrops.set(sessionDbId, total);
+    if (before === 0 || Math.floor(total / QUEUE_CAP_WARN_EVERY) > Math.floor(before / QUEUE_CAP_WARN_EVERY)) {
+      logger.warn('QUEUE', `CAP_DROPPED | sessionDbId=${sessionDbId} | droppedTotal=${total} | cap=${cap} | oldest waiting observations dropped (CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS)`, {
+        sessionId: sessionDbId,
+        droppedTotal: total,
+        cap,
+      });
     }
   }
 
@@ -394,10 +445,15 @@ export class SessionManager {
    *   returns as soon as it runs dry, while an idle queue gets up to
    *   `lingerMs` (in total, not per message) for the rest of a burst to
    *   arrive.
-   * - Claims with buffer.claimContiguous: FIFO, stopping at the first message
-   *   that is not an observation of the same prompt, agent and cwd, or that
-   *   would take the batch past `maxChars` — so a summarize request is never
-   *   skipped over.
+   * - Claims with buffer.claimMatching: oldest first, taking only
+   *   observations of the same prompt, agent and cwd as `first`. Observations
+   *   of other groups (the interleaved events of parallel subagents) are
+   *   skipped and stay queued, in their order, for later turns. Anything that
+   *   is not an observation — a summarize request — is a barrier: nothing at
+   *   or past it is claimed. The first same-group observation that would take
+   *   the batch past `maxChars` closes the group, so no later one is claimed
+   *   ahead of it. A batch therefore never reaches past a barrier and is never
+   *   out of order within its group.
    * - Records every claimed id in `session.claimedMessageIds`, exactly like
    *   the drain does for `first`, so confirmClaimedMessages and
    *   resetProcessingToPending act on the whole batch together, and keeps
@@ -430,18 +486,31 @@ export class SessionManager {
     const mayLinger = this.buffer.getUnclaimedCount(sessionDbId) === 0;
     const lingerUntil = Date.now() + Math.max(0, policy.lingerMs);
     const inBatch = new Set<number>([first._persistentId]);
+    // Set once a same-group observation does not fit the budget: taking a
+    // later, smaller one of the group would answer it out of order.
+    let groupClosed = false;
+    const isBarrier = (candidate: PendingMessageWithId): boolean => candidate.type !== 'observation';
     const accept = (candidate: PendingMessageWithId): boolean => {
+      if (groupClosed) return false;
       // A message already in this batch can only be offered again if its
       // claim was reset underneath us; sending it twice would store it twice.
-      if (inBatch.has(candidate._persistentId)) return false;
+      // It is waiting again, so it also closes the group: a later one of the
+      // group claimed now would be answered before it.
+      if (inBatch.has(candidate._persistentId)) {
+        groupClosed = true;
+        return false;
+      }
       if (!sameObservationGroup(first, candidate)) return false;
       const size = observationBatchChars(candidate);
-      if (chars + size > policy.maxChars) return false;
+      if (chars + size > policy.maxChars) {
+        groupClosed = true;
+        return false;
+      }
       chars += size;
       return true;
     };
 
-    while (batch.length < maxMessages && !signal.aborted) {
+    while (batch.length < maxMessages && !signal.aborted && !groupClosed) {
       if (this.buffer.getUnclaimedCount(sessionDbId) === 0) {
         if (!mayLinger) break;
         const remainingMs = lingerUntil - Date.now();
@@ -451,10 +520,14 @@ export class SessionManager {
         continue;
       }
 
-      const claimed = this.buffer.claimContiguous(sessionDbId, accept, maxMessages - batch.length);
+      const claimed = this.buffer.claimMatching(sessionDbId, {
+        isBarrier,
+        accept,
+        max: maxMessages - batch.length,
+      });
       if (claimed.length === 0) {
-        // The oldest waiting message cannot join (a summarize, another
-        // prompt/agent/cwd, or over budget). FIFO: the batch ends here.
+        // Nothing waiting can join (a summarize ahead of it, only other
+        // prompts/agents/cwds, or over budget): the batch ends here.
         break;
       }
       for (const message of claimed) {
@@ -544,6 +617,7 @@ export class SessionManager {
       this.deliverSessionWrapupInBackground(sessionDbId);
     }
     this.buffer.dispose(sessionDbId);
+    this.queueCapDrops.delete(sessionDbId);
     this.sessions.delete(sessionDbId);
     logger.info('SESSION', 'Session deleted', {
       sessionId: sessionDbId,
@@ -571,6 +645,7 @@ export class SessionManager {
     }
 
     this.buffer.dispose(sessionDbId);
+    this.queueCapDrops.delete(sessionDbId);
     this.sessions.delete(sessionDbId);
     logger.info('SESSION', 'Session removed from active sessions', {
       sessionId: sessionDbId,

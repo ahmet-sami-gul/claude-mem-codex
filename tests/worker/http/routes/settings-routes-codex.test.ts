@@ -21,7 +21,7 @@ import {
  * This route is UNAUTHENTICATED and reachable from any page the user has open,
  * and the settings behind it now decide how much of a paid ChatGPT plan the
  * observer may spend. So the coverage here is mostly about what must NOT be
- * writable: the provider switch itself, and the seven cost levers. A client
+ * writable: the provider switch itself, and the eight cost levers. A client
  * may post the whole GET body back unchanged (the viewer did before it began
  * sending only what it may change), so the same rules also have to accept
  * every value the GET returned.
@@ -89,6 +89,7 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     CLAUDE_MEM_CODEX_BATCH_LINGER_MS: '2000',
     CLAUDE_MEM_CODEX_FIELD_COMPRESSION: 'false',
     CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '0',
+    CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '500',
     CLAUDE_MEM_CODEX_TRANSPORT: 'exec',
     CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT: '0',
     CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS: '300000',
@@ -201,6 +202,8 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     ['CLAUDE_MEM_CODEX_PATH', '/tmp/attacker-codex'],
     ['CLAUDE_MEM_CODEX_HOME', '/tmp/attacker-codex-home'],
     ['CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H', '0'],
+    ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', '50'],
+    ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', '0'],
     ['CLAUDE_MEM_CODEX_TRANSPORT', 'exec'],
     ['CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT', '50'],
     ['CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS', '3600000'],
@@ -250,6 +253,11 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     ['CLAUDE_MEM_CODEX_BATCH_LINGER_MS', '60000'],
     ['CLAUDE_MEM_CODEX_FIELD_COMPRESSION', 'yes'],
     ['CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H', '-1'],
+    ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', '10'],
+    ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', '49'],
+    ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', '100001'],
+    ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', '-1'],
+    ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', '12.5'],
     ['CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT', '80'],
     ['CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS', '1000'],
     ['CLAUDE_MEM_CODEX_TRANSPORT', 'app-server'],
@@ -288,6 +296,7 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     ['CLAUDE_MEM_CODEX_BATCH_LINGER_MS', true],
     ['CLAUDE_MEM_CODEX_FIELD_COMPRESSION', true],
     ['CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H', 40],
+    ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', 500],
   ])('rejects the non-string %s = %p and writes nothing', (key, value) => {
     const before = readFileSync(settingsPath, 'utf-8');
 
@@ -300,7 +309,7 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
   /**
    * Validation runs over the WHOLE body and the viewer posts the whole GET body
    * back, so a value the route will not even write must not be able to 400
-   * every future save. These seven levers are file/env only — there is no form
+   * every future save. These eight levers are file/env only — there is no form
    * field for them and no write path — and the runtime is the lenient half of
    * the pair (getConfig warns and clamps). A user who set one outside its
    * bounds must still be able to save unrelated settings from the viewer.
@@ -310,6 +319,7 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
     ['CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS', '30000'],
     ['CLAUDE_MEM_CODEX_TRANSPORT', 'exec-resume'],
     ['CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H', '-4'],
+    ['CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', '10'],
     ['CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION', 'yes'],
   ])('keeps the viewer round-trip working when %s is out of bounds in settings.json', (key, value) => {
     persist({ [key]: value });
@@ -431,6 +441,7 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
       CLAUDE_MEM_CODEX_PATH: '/opt/codex/bin/codex',
       CLAUDE_MEM_CODEX_HOME: '/Users/someone/.codex-observer',
       CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '200',
+      CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '800',
       CLAUDE_MEM_CODEX_TIMEOUT_MS: '5',           // out of range in the file
       CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION: 'true',
     });
@@ -465,6 +476,7 @@ describe('SettingsRoutes — CLAUDE_MEM_CODEX_* (plan 3.1)', () => {
       CLAUDE_MEM_CODEX_PATH: '/opt/codex/bin/codex',
       CLAUDE_MEM_CODEX_HOME: '/Users/someone/.codex-observer',
       CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '200',
+      CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '800',
       CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION: 'true',
     });
   });

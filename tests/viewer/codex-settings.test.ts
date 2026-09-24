@@ -7,11 +7,13 @@ import {
   CODEX_MODEL_ID_RE,
   CODEX_MODEL_OPTIONS,
   CODEX_NUMBER_BOUNDS,
+  CODEX_QUEUE_CAP_BOUNDS,
   CODEX_SMALL_ALLOWANCE_MODELS,
   PROVIDER_OPTIONS,
   buildSettingsSaveBody,
   codexNumberError,
   describeCodexExecCap,
+  describeCodexQueueCap,
   effectiveCodexLevel,
   effectiveCodexModel,
   effectiveCodexNumber,
@@ -111,6 +113,9 @@ describe('viewer codex constants mirror the worker', () => {
       expect(DEFAULT_SETTINGS[key]).toBe(String(runtime[key].fallback));
     }
     expect(DEFAULT_SETTINGS.CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H).toBe(String(CODEX_CONFIG_BOUNDS.maxExecsPer5h.fallback));
+    const { fallback, ...queueCapBounds } = CODEX_CONFIG_BOUNDS.maxQueuedObservations;
+    expect(CODEX_QUEUE_CAP_BOUNDS).toEqual(queueCapBounds);
+    expect(DEFAULT_SETTINGS.CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS).toBe(String(fallback));
   });
 
   it('seeds every codex field with the server default, exactly', () => {
@@ -133,7 +138,7 @@ describe('viewer codex constants mirror the worker', () => {
     const observerKeys = serverCodexKeys.filter(key => key !== 'CLAUDE_MEM_CODEX_TRANSCRIPT_INGESTION');
     const fileOnly = observerKeys.filter(key => !writable.has(key)).sort();
     expect([...CODEX_FILE_ONLY_KEYS].sort()).toEqual(fileOnly);
-    expect(CODEX_FILE_ONLY_KEYS).toHaveLength(7);
+    expect(CODEX_FILE_ONLY_KEYS).toHaveLength(8);
   });
 
   it('checks model ids with the worker pattern', () => {
@@ -150,8 +155,9 @@ describe('viewer codex constants mirror the worker', () => {
     );
     expect(modal).not.toContain("'CLAUDE_MEM_CODEX_PATH'");
     expect(modal).not.toContain("'CLAUDE_MEM_CODEX_HOME'");
-    // The exec cap is displayed, never edited.
+    // The exec cap and the queue cap are displayed, never edited.
     expect(modal).not.toContain("updateSetting('CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H'");
+    expect(modal).not.toContain("updateSetting('CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS'");
   });
 });
 
@@ -207,14 +213,18 @@ describe('buildSettingsSaveBody', () => {
     CLAUDE_MEM_CODEX_PATH: null,
     CLAUDE_MEM_CODEX_HOME: '   ',
     CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '200',
+    CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '800',
     CLAUDE_MEM_CODEX_TRANSPORT: 'exec',
     CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT: '0',
     CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS: '300000',
     CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION: 'false',
   } as Record<string, unknown>;
 
-  it('never sends the seven file/env-only codex keys, changed or not', () => {
-    const body = buildSettingsSaveBody({ ...persisted, CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '0' }, persisted);
+  it('never sends the eight file/env-only codex keys, changed or not', () => {
+    const body = buildSettingsSaveBody(
+      { ...persisted, CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '0', CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '50' },
+      persisted,
+    );
     for (const key of CODEX_FILE_ONLY_KEYS) {
       expect(key in body).toBe(false);
     }
@@ -357,5 +367,32 @@ describe('describeCodexExecCap', () => {
   it('never goes below the runtime minimum', () => {
     expect(CODEX_CONFIG_BOUNDS.maxExecsPer5h.min).toBe(0);
     expect(describeCodexExecCap('-1').limit).toBe(CODEX_CONFIG_BOUNDS.maxExecsPer5h.min);
+  });
+});
+
+describe('describeCodexQueueCap', () => {
+  it.each([
+    [undefined, 500, false],
+    ['', 500, false],
+    ['0', 0, false],
+    ['50', 50, false],
+    [' 800 ', 800, false],
+    ['100000', 100_000, false],
+    ['10', 50, true],
+    ['-4', 0, true],
+    ['250000', 100_000, true],
+    ['abc', 500, true],
+    ['2.5', 500, true],
+    [300, 500, true],
+  ])('reads %p as a cap of %p (problem: %p)', (raw, limit, problem) => {
+    const described = describeCodexQueueCap(raw);
+    expect(described.limit).toBe(limit);
+    expect(described.problem !== null).toBe(problem);
+    expect(described.text).toBe(limit === 0 ? 'No cap (0)' : `${limit.toLocaleString('en-US')} waiting observations per session`);
+  });
+
+  it('uses the runtime default and the lowest cap', () => {
+    expect(describeCodexQueueCap(undefined).limit).toBe(CODEX_CONFIG_BOUNDS.maxQueuedObservations.fallback);
+    expect(describeCodexQueueCap('1').limit).toBe(CODEX_CONFIG_BOUNDS.maxQueuedObservations.minCap);
   });
 });

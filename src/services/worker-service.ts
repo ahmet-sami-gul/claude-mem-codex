@@ -88,7 +88,7 @@ import { ClaudeProvider, classifyClaudeError } from './worker/ClaudeProvider.js'
 import type { WorkerRef } from './worker/agents/types.js';
 import { GeminiProvider, classifyGeminiError } from './worker/GeminiProvider.js';
 import { OpenRouterProvider, classifyOpenRouterError } from './worker/OpenRouterProvider.js';
-import { CodexProvider } from './worker/CodexProvider.js';
+import { CodexProvider, codexObservationQueueCapReader } from './worker/CodexProvider.js';
 import { startCodexMetricsReporter } from './worker/codex/codex-metrics.js';
 import { getSelectedProvider } from './worker/provider-dispatch.js';
 import { ClassifiedProviderError, isClassified, type ProviderErrorClass } from './worker/provider-errors.js';
@@ -281,6 +281,9 @@ export class WorkerService implements WorkerRef {
     });
 
     this.sessionManager.setOnPendingMutate(() => this.broadcastProcessingStatus());
+    // CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: bounds each session's waiting
+    // observations while codex is the provider (a briefly cached settings read).
+    this.sessionManager.setObservationQueueCap(codexObservationQueueCapReader());
 
     this.mcpClient = new Client({
       name: 'worker-search-proxy',

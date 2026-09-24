@@ -97,11 +97,12 @@ export function withPersistedOption(options: readonly SelectOption[], persisted:
 }
 
 /**
- * The seven codex keys the settings route never writes (SettingsRoutes'
- * write allowlist leaves them out): each could lift the exec cap, run another
- * binary or login, or relax a guard, so only settings.json or the environment
- * sets them. The viewer leaves them out of every save. Posting them back gains
- * nothing, and the route still validates what it is sent: a hand-edited
+ * The eight codex keys the settings route never writes (SettingsRoutes'
+ * write allowlist leaves them out): each could lift the exec cap, discard or
+ * pile up waiting observations, run another binary or login, or relax a
+ * guard, so only settings.json or the environment sets them. The viewer
+ * leaves them out of every save. Posting them back gains nothing, and the
+ * route still validates what it is sent: a hand-edited
  * `"CLAUDE_MEM_CODEX_PATH": null` in the file would otherwise make every save
  * fail with a 400, including saves of unrelated settings.
  */
@@ -109,6 +110,7 @@ export const CODEX_FILE_ONLY_KEYS: readonly string[] = [
   'CLAUDE_MEM_CODEX_PATH',
   'CLAUDE_MEM_CODEX_HOME',
   'CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H',
+  'CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS',
   'CLAUDE_MEM_CODEX_TRANSPORT',
   'CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT',
   'CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS',
@@ -125,7 +127,7 @@ export const CODEX_FILE_ONLY_KEYS: readonly string[] = [
  * meant to allow only through the file or the environment: its "unchanged"
  * check reads the same env-applied value, so it accepts the copy. So:
  *
- *   - the seven file/env-only codex keys are never sent (CODEX_FILE_ONLY_KEYS);
+ *   - the eight file/env-only codex keys are never sent (CODEX_FILE_ONLY_KEYS);
  *   - CLAUDE_MEM_PROVIDER and every other CLAUDE_MEM_CODEX_* key is sent only
  *     when the user changed it from what GET returned (`persisted`).
  *
@@ -315,5 +317,48 @@ export function describeCodexExecCap(raw: unknown): CodexExecCapDescription {
   const text = limit === 0
     ? 'No local cap (0)'
     : `${formatCount(limit)} Codex call${limit === 1 ? '' : 's'} per 5 hours`;
+  return { limit, text, problem };
+}
+
+/** Mirrors CODEX_CONFIG_BOUNDS.maxQueuedObservations (CodexProvider). */
+export const CODEX_QUEUE_CAP_BOUNDS = { min: 0, minCap: 50, max: 100_000 } as const;
+
+/**
+ * CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS as the worker reads it
+ * (resolveCodexObservationQueueCap: clampedInt with bounds 0..100,000 and
+ * fallback 500, then 1-49 raised to 50): empty is the default, a non-string or
+ * non-integer falls back to it, a negative clamps to 0 (no cap). Shown
+ * read-only, so it must say what is actually enforced, not merely what the
+ * file says.
+ */
+export function describeCodexQueueCap(raw: unknown): CodexExecCapDescription {
+  const fallback = Number(DEFAULT_SETTINGS.CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS);
+  const { minCap, max } = CODEX_QUEUE_CAP_BOUNDS;
+  let limit = fallback;
+  let problem: string | null = null;
+  if (raw === undefined || raw === null) {
+    limit = fallback;
+  } else if (typeof raw !== 'string') {
+    problem = `${CONFIGURED_SOURCE} holds ${describeRaw(raw)}, which is not a string, so the worker ignores it and uses ${formatCount(fallback)}. Write it as a quoted string.`;
+  } else if (raw.trim() !== '') {
+    const parsed = Number(raw.trim());
+    if (!Number.isInteger(parsed)) {
+      problem = `${CONFIGURED_SOURCE} holds "${raw}", which is not a whole number, so the worker ignores it and uses ${formatCount(fallback)}.`;
+    } else if (parsed < 0) {
+      limit = 0;
+      problem = `${CONFIGURED_SOURCE} holds "${raw}"; the worker treats a negative value as 0 (no cap).`;
+    } else if (parsed > 0 && parsed < minCap) {
+      limit = minCap;
+      problem = `${CONFIGURED_SOURCE} holds "${raw}"; the lowest cap is ${minCap}, so the worker uses ${minCap}.`;
+    } else if (parsed > max) {
+      limit = max;
+      problem = `${CONFIGURED_SOURCE} holds "${raw}"; the highest cap is ${formatCount(max)}, so the worker uses ${formatCount(max)}.`;
+    } else {
+      limit = parsed;
+    }
+  }
+  const text = limit === 0
+    ? 'No cap (0)'
+    : `${formatCount(limit)} waiting observation${limit === 1 ? '' : 's'} per session`;
   return { limit, text, problem };
 }

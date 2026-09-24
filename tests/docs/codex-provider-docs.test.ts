@@ -2,6 +2,8 @@ import { describe, it, expect } from 'bun:test';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { CODEX_CONFIG_BOUNDS } from '../../src/services/worker/CodexProvider.js';
+import { CLAIM_MATCHING_LOOKAHEAD } from '../../src/services/worker/SessionMessageBuffer.js';
+import { QUEUE_CAP_WARN_EVERY } from '../../src/services/worker/SessionManager.js';
 import {
   CODEX_CONFIG_PINS,
   CODEX_DEFAULT_MODEL,
@@ -81,7 +83,7 @@ describe('docs/public/usage/codex-provider.mdx', () => {
   const defaults = serverCodexDefaults();
 
   it('documents every codex setting with its exact default', () => {
-    expect(defaults.size).toBe(17);
+    expect(defaults.size).toBe(18);
     for (const [key, value] of defaults) {
       const [, defaultCell] = tableRow(codexPage, key);
       expect(documentedDefault(defaultCell)).toBe(value);
@@ -93,6 +95,27 @@ describe('docs/public/usage/codex-provider.mdx', () => {
       const [, , values] = tableRow(codexPage, key);
       expect(values).toContain(`\`${min}\`–\`${max}\``);
     }
+    // 0 (no cap), or minCap..max.
+    const { minCap, max } = CODEX_CONFIG_BOUNDS.maxQueuedObservations;
+    const [, , queueCapValues, queueCapWhat] = tableRow(codexPage, 'CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS');
+    expect(queueCapValues).toBe(`\`0\`, or \`${minCap}\`–\`${max}\``);
+    // The runtime clamps a negative value to min 0, which is no cap, not minCap.
+    expect(CODEX_CONFIG_BOUNDS.maxQueuedObservations.min).toBe(0);
+    expect(queueCapWhat).toContain('and so does a negative value (read as `0`)');
+  });
+
+  it('documents the batching rules and the waiting-observation cap', () => {
+    expect(codexPage).toContain('### How batching works');
+    expect(codexPage).toContain('**One group per call.**');
+    expect(codexPage).toContain('**A summary request is a barrier.**');
+    expect(codexPage).toContain(`A call looks at most ${CLAIM_MATCHING_LOOKAHEAD} waiting tool uses ahead.`);
+    expect(codexPage).not.toContain('Consecutive tool uses');
+    // The drain takes the oldest waiting tool use next, which may be another group's.
+    expect(codexPage).toContain("that tool use is sent first in its group's next call");
+    expect(codexPage).toContain('and so does a negative value (read as `0`); any positive value is at least `50`');
+    expect(codexPage).toContain('### The waiting-observation cap');
+    expect(codexPage).toContain('`ai.codex.metrics.queuedObservationsDropped`');
+    expect(codexPage).toContain(`then once per ${QUEUE_CAP_WARN_EVERY} drops`);
   });
 
   it('lists the allowlisted models and the file/env model pattern', () => {
@@ -110,6 +133,7 @@ describe('docs/public/usage/codex-provider.mdx', () => {
       'CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION',
       'CLAUDE_MEM_CODEX_HOME',
       'CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H',
+      'CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS',
       'CLAUDE_MEM_CODEX_PATH',
       'CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT',
       'CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS',

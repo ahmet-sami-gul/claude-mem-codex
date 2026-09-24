@@ -17,7 +17,9 @@
  *   - input / cached-input / output / reasoning token totals from
  *     `turn.completed.usage`;
  *   - forbidden-tool attempts seen by the runner's guard, and calls the local
- *     5-hour budget refused.
+ *     5-hour budget refused;
+ *   - waiting observations the queue cap dropped
+ *     (CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS, SessionManager).
  *
  * Counts only: no prompt, reply, tool payload, session id or project name ever
  * reaches this module. The counters are process-lifetime and in memory (the
@@ -71,6 +73,8 @@ export interface CodexMetricsSnapshot {
   toolAttempts: number;
   /** Calls the local 5-hour exec budget refused (no exec spawned). */
   budgetRefusals: number;
+  /** Waiting observations dropped by CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS (never sent). */
+  queuedObservationsDropped: number;
 }
 
 function purposeKey(purpose: CodexCallPurpose): keyof CodexMetricsSnapshot['calls'] {
@@ -139,6 +143,10 @@ export class CodexMetrics {
     this.state.budgetRefusals += 1;
   }
 
+  recordQueuedObservationsDropped(count: number): void {
+    this.state.queuedObservationsDropped += safeCount(count);
+  }
+
   snapshot(): CodexMetricsSnapshot {
     const s = this.state;
     return {
@@ -156,6 +164,7 @@ export class CodexMetrics {
       tokens: { ...s.tokens },
       toolAttempts: s.toolAttempts,
       budgetRefusals: s.budgetRefusals,
+      queuedObservationsDropped: s.queuedObservationsDropped,
     };
   }
 
@@ -173,6 +182,7 @@ export class CodexMetrics {
       tokens: { input: 0, cached: 0, output: 0, reasoning: 0, turnsReported: 0 },
       toolAttempts: 0,
       budgetRefusals: 0,
+      queuedObservationsDropped: 0,
     };
   }
 }
@@ -214,7 +224,13 @@ export function startCodexMetricsReporter(options: CodexMetricsReporterOptions =
     const first = lastKey === null;
     lastKey = key;
     // Nothing has happened at all yet: not worth a line.
-    if (first && snapshot.execs === 0 && snapshot.budgetRefusals === 0 && snapshot.skipped.init === 0) return false;
+    if (
+      first
+      && snapshot.execs === 0
+      && snapshot.budgetRefusals === 0
+      && snapshot.skipped.init === 0
+      && snapshot.queuedObservationsDropped === 0
+    ) return false;
     logger.info('SDK', 'Codex observer usage', {
       since: new Date(snapshot.sinceMs).toISOString(),
       execs: snapshot.execs,
@@ -226,6 +242,7 @@ export function startCodexMetricsReporter(options: CodexMetricsReporterOptions =
       tokens: snapshot.tokens,
       toolAttempts: snapshot.toolAttempts,
       budgetRefusals: snapshot.budgetRefusals,
+      queuedObservationsDropped: snapshot.queuedObservationsDropped,
     });
     return true;
   };

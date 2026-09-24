@@ -4,6 +4,23 @@ import { logger } from '../../utils/logger.js';
 
 const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
 
+/**
+ * How many unclaimed messages one claimMatching call examines at most, so a
+ * large backlog of other groups' work is not walked end to end for every batch.
+ */
+export const CLAIM_MATCHING_LOOKAHEAD = 256;
+
+export interface ClaimMatchingOptions {
+  /** True for a message nothing may be claimed at or past (a summarize request, init). */
+  isBarrier: (message: PendingMessageWithId) => boolean;
+  /** Claim this message (true) or skip it and keep walking (false). */
+  accept: (message: PendingMessageWithId) => boolean;
+  /** Most messages to claim in this call. */
+  max: number;
+  /** Most unclaimed messages to examine; defaults to CLAIM_MATCHING_LOOKAHEAD. */
+  lookahead?: number;
+}
+
 interface BufferedMessage {
   id: number;
   message: PendingMessage;
@@ -221,37 +238,39 @@ export class SessionMessageBuffer {
   }
 
   /**
-   * Claim further buffered messages, in FIFO order, for the batch a generator
-   * is building (M4 observation batching).
+   * Claim further buffered messages for the batch a generator is building
+   * (M4 observation batching).
    *
-   * Walks the unclaimed messages oldest first and claims each one `accept`
-   * says yes to, up to `max`. It stops at the FIRST message `accept` rejects
-   * and never looks past it: a batch is always a contiguous run of the queue,
-   * so a summarize request (or an observation from another prompt, agent or
-   * directory) is never skipped over and answered out of order — it simply
-   * ends the batch, and the drain yields it next.
+   * Walks the unclaimed messages oldest first. It stops at the first one
+   * `isBarrier` says yes to and never looks past it: a summarize request is
+   * never skipped over, and nothing behind it is answered ahead of it — the
+   * drain yields it next. Any other message is claimed when `accept` says yes
+   * and SKIPPED when it says no: it stays unclaimed, in its place, for a later
+   * turn, and the walk goes on. So the observations of parallel subagents,
+   * whose events interleave in the queue, can each fill their own batch.
    *
-   * `accept` is called at most once per message, in queue order, and not at
-   * all once the batch is full or a message has been rejected, so it may keep
-   * running totals (a character budget) across calls.
+   * The walk ends once `max` messages are claimed or `lookahead` unclaimed
+   * messages have been examined. `accept` is called at most once per
+   * message, in queue order, and never for a barrier, so it may keep running
+   * totals (a character budget) and decide what order to keep within a group.
    */
-  claimContiguous(
-    sessionDbId: number,
-    accept: (message: PendingMessageWithId) => boolean,
-    max: number,
-  ): PendingMessageWithId[] {
+  claimMatching(sessionDbId: number, options: ClaimMatchingOptions): PendingMessageWithId[] {
+    const { isBarrier, accept, max, lookahead = CLAIM_MATCHING_LOOKAHEAD } = options;
     const claimed: PendingMessageWithId[] = [];
     const list = this.buffers.get(sessionDbId);
     if (!list || !(max > 0)) return claimed;
 
+    let examined = 0;
     for (const entry of list) {
-      if (claimed.length >= max) break;
+      if (claimed.length >= max || examined >= lookahead) break;
       // Already claimed: the batch being built (or an unconfirmed earlier
       // one). Claimed work is in flight, not waiting, so it neither joins nor
       // ends this batch.
       if (entry.claimed) continue;
+      examined++;
       const view = this.toPendingWithId(entry);
-      if (!accept(view)) break;
+      if (isBarrier(view)) break;
+      if (!accept(view)) continue;
       entry.claimed = true;
       claimed.push(view);
     }
@@ -260,6 +279,40 @@ export class SessionMessageBuffer {
       this.onMutate?.();
     }
     return claimed;
+  }
+
+  /**
+   * Drop the OLDEST unclaimed observations of a session until at most `keep`
+   * unclaimed observations remain (the codex queue cap). Claimed messages are
+   * in flight and never dropped; nor is anything but an observation (a
+   * summarize request). Dropped toolUseIds stay in the dedup set, so a
+   * re-delivered duplicate of a dropped tool use is still suppressed. Returns
+   * how many were dropped.
+   */
+  dropOldestUnclaimedObservations(sessionDbId: number, keep: number): number {
+    const list = this.buffers.get(sessionDbId);
+    if (!list) return 0;
+    const droppable = (entry: BufferedMessage): boolean => !entry.claimed && entry.message.type === 'observation';
+
+    let unclaimedObservations = 0;
+    for (const entry of list) {
+      if (droppable(entry)) unclaimedObservations++;
+    }
+    let toDrop = unclaimedObservations - Math.max(0, keep);
+    if (toDrop <= 0) return 0;
+
+    const dropped = toDrop;
+    let kept = 0;
+    for (const entry of list) {
+      if (toDrop > 0 && droppable(entry)) {
+        toDrop--;
+        continue;
+      }
+      list[kept++] = entry;
+    }
+    list.length = kept;
+    this.onMutate?.();
+    return dropped;
   }
 
   /**

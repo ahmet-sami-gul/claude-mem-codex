@@ -12,6 +12,7 @@ import {
   buildSettingsSaveBody,
   codexNumberError,
   describeCodexExecCap,
+  describeCodexQueueCap,
   effectiveCodexLevel,
   effectiveCodexModel,
   effectiveCodexNumber,
@@ -185,6 +186,7 @@ export function CodexProviderFields({
   // can differ from what the field shows for a value set outside this page.
   const effectiveModel = effectiveCodexModel(formState.CLAUDE_MEM_CODEX_MODEL);
   const execCap = describeCodexExecCap(formState.CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H);
+  const queueCap = describeCodexQueueCap(formState.CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS);
 
   // A text field, not type="number": a number input reports '' for text it
   // cannot parse ("300k", "2e") while still showing that text, so the entry
@@ -314,7 +316,7 @@ export function CodexProviderFields({
       {numberField(
         'CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS',
         'Batch Size',
-        'Consecutive tool uses from the same prompt sent in one Codex call (1-12). Each call is one plan message; 1 turns batching off.',
+        'Tool uses from the same prompt, agent and working directory sent in one Codex call, oldest first (1-12). Each call is one plan message; 1 turns batching off.',
       )}
       {numberField(
         'CLAUDE_MEM_CODEX_TIMEOUT_MS',
@@ -330,6 +332,17 @@ export function CodexProviderFields({
         <p className="form-field-hint">
           Read-only here: set CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H in ~/.claude-mem/settings.json or the
           worker's environment. This page cannot change it, so no web page can lift the cap.
+        </p>
+      </FormField>
+      <FormField
+        label="Max Waiting Observations per Session"
+        tooltip="How many captured tool uses one session may hold while they wait for Codex (for example during a pause). Past it the oldest waiting ones are dropped, so what a long pause can cost once it ends is bounded by this number: at most this many tool uses per session are left to send."
+      >
+        <div className="form-field-readonly">{queueCap.text}</div>
+        {queueCap.problem && <p className="form-field-warning">{queueCap.problem}</p>}
+        <p className="form-field-hint">
+          Read-only here: set CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS in ~/.claude-mem/settings.json or
+          the worker's environment. This page cannot change it.
         </p>
       </FormField>
     </>

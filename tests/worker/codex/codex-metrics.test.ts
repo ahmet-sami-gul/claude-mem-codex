@@ -81,6 +81,18 @@ describe('CodexMetrics', () => {
     expect(snapshot.budgetRefusals).toBe(2);
   });
 
+  it('counts the waiting observations the queue cap dropped', () => {
+    const metrics = new CodexMetrics();
+    expect(metrics.snapshot().queuedObservationsDropped).toBe(0);
+    metrics.recordQueuedObservationsDropped(3);
+    metrics.recordQueuedObservationsDropped(1);
+    metrics.recordQueuedObservationsDropped(-2);
+    metrics.recordQueuedObservationsDropped(Number.NaN);
+    expect(metrics.snapshot().queuedObservationsDropped).toBe(4);
+    metrics.reset();
+    expect(metrics.snapshot().queuedObservationsDropped).toBe(0);
+  });
+
   it('ignores garbage numbers rather than corrupting the totals', () => {
     const metrics = new CodexMetrics();
     metrics.recordUsage({ input: Number.NaN, cached: -4, output: Number.POSITIVE_INFINITY, reasoning: 2.9 });
@@ -175,6 +187,18 @@ describe('startCodexMetricsReporter', () => {
     const reporter = startCodexMetricsReporter({ metrics, ...manualInterval() });
     expect(reporter.report()).toBe(true);
     expect(reporter.report()).toBe(false);
+    reporter.stop();
+  });
+
+  it('reports queue-cap drops even when no exec has run (a paused observer)', () => {
+    const info = spyOn(logger, 'info').mockImplementation(() => {});
+    spies.push(info);
+    const metrics = new CodexMetrics();
+    metrics.recordQueuedObservationsDropped(7);
+    const reporter = startCodexMetricsReporter({ metrics, ...manualInterval() });
+    expect(reporter.report()).toBe(true);
+    const [, , fields] = info.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(fields).toMatchObject({ execs: 0, queuedObservationsDropped: 7 });
     reporter.stop();
   });
 });

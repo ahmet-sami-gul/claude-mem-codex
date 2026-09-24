@@ -71,11 +71,12 @@ The worker port is `CLAUDE_MEM_WORKER_PORT` (default `37700 + (uid % 100)`). Loo
 | `CLAUDE_MEM_CODEX_VERBOSITY` | `low` | `low`, `medium`, `high` | Reply length; the only output-length setting Codex offers |
 | `CLAUDE_MEM_CODEX_TIMEOUT_MS` | `180000` | `30000`–`600000` | Deadline for one call. When it passes, the process is interrupted (and killed 5 s later if it has not stopped); the observations are kept and retried. Independent of `CLAUDE_MEM_LLM_TIMEOUT_MS` |
 | `CLAUDE_MEM_CODEX_MAX_CONVERSATION_CHARS` | `120000` | `40000`–`400000` | Every call re-sends the observer conversation; past this size it is recycled into a fresh one. Never smaller than the first turn + `CLAUDE_MEM_CODEX_BATCH_MAX_CHARS` + 16,000. Replaces `CLAUDE_MEM_OBSERVER_MAX_CONVERSATION_CHARS` for Codex |
-| `CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS` | `4` | `1`–`12` | Consecutive tool uses from the same prompt, agent and working directory sent in one call. `1` turns batching off |
+| `CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS` | `4` | `1`–`12` | Tool uses from the same prompt, agent and working directory sent in one call, oldest first (see [How batching works](#how-batching-works)). `1` turns batching off |
 | `CLAUDE_MEM_CODEX_BATCH_MAX_CHARS` | `48000` | `8000`–`96000` | Most new characters in one batch; at least one tool use is always sent |
 | `CLAUDE_MEM_CODEX_BATCH_LINGER_MS` | `2000` | `0`–`30000` | How long to wait for one more tool use, only while nothing else is queued |
 | `CLAUDE_MEM_CODEX_FIELD_COMPRESSION` | `false` | `true`, `false` | `false`: a tool input or output over 16,000 characters is cut to its head and tail inside the prompt. `true`: each such field gets its own compression call (an extra plan message per field) |
 | `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H` | `0` | whole number, `0` or more | Local cap on Codex calls in any sliding 5-hour window. `0` means no cap |
+| `CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS` | `500` | `0`, or `50`–`100000` | Most tool uses one session may hold while they wait for Codex; past it the oldest waiting ones are dropped (see [The waiting-observation cap](#the-waiting-observation-cap)). `0` means no cap, and so does a negative value (read as `0`); `1`–`49` is raised to `50`. Applies only while Codex is the provider |
 | `CLAUDE_MEM_CODEX_PATH` | empty | Absolute path; a leading `~` is expanded | The codex binary to run. Empty searches `PATH` (and the macOS app bundles). When set it is authoritative: a broken path is an error, never a reason to search elsewhere |
 | `CLAUDE_MEM_CODEX_HOME` | empty | Absolute path; a leading `~` is expanded | `CODEX_HOME` for the observer, i.e. which Codex login it uses. Empty means `$CODEX_HOME`, else `~/.codex`. `auth.json` is used in place, never copied |
 | `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION` | `false` | `true`, `false` | Lets a codex-cli version outside the tested range pass the self-check. The catalog, feature and canary probes still run, and a model's minimum codex-cli version is still enforced |
@@ -99,11 +100,11 @@ At runtime the worker is lenient where the API is strict: a whole number outside
 
 ### Who can change what
 
-The settings API is unauthenticated, so what it may write is limited to tuning. It cannot lift the 5-hour cap, change the binary or the login, or relax a check. Tuning keys can still raise the cost of each call or the number of calls within that cap: a larger model or higher effort, a smaller batch size (`1` turns batching off), or field compression (an extra call per oversized field). That is another reason to set `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`.
+The settings API is unauthenticated, so what it may write is limited to tuning. It cannot lift the 5-hour cap, change the waiting-observation cap, change the binary or the login, or relax a check. Tuning keys can still raise the cost of each call or the number of calls within that cap: a larger model or higher effort, a smaller batch size (`1` turns batching off), or field compression (an extra call per oversized field). That is another reason to set `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`.
 
-- **In the viewer** (gear icon → **Advanced**, while Codex is the provider): model (allowlisted models only; a warning appears for `gpt-5.6-sol`, `gpt-6-sol` and `gpt-6-astra`), reasoning effort, verbosity, conversation budget, batch size and timeout. The 5-hour cap is shown **read-only**. There is no field for the binary path.
+- **In the viewer** (gear icon → **Advanced**, while Codex is the provider): model (allowlisted models only; a warning appears for `gpt-5.6-sol`, `gpt-6-sol` and `gpt-6-astra`), reasoning effort, verbosity, conversation budget, batch size and timeout. The 5-hour cap and the waiting-observation cap are shown **read-only**. There is no field for the binary path.
 - **In `settings.json` or through the API, not in the viewer:** `CLAUDE_MEM_CODEX_SUMMARY_MODEL`, `CLAUDE_MEM_CODEX_BATCH_MAX_CHARS`, `CLAUDE_MEM_CODEX_BATCH_LINGER_MS`, `CLAUDE_MEM_CODEX_FIELD_COMPRESSION`. These are ordinary settings; they are just not shown in the viewer. Over the API the summary model is limited to the allowlisted models, while the file accepts any id matching the model pattern.
-- **File or environment only:** switching `CLAUDE_MEM_PROVIDER` to or from `codex`, and `CLAUDE_MEM_CODEX_PATH`, `CLAUDE_MEM_CODEX_HOME`, `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`, `CLAUDE_MEM_CODEX_TRANSPORT`, `CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT`, `CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS` and `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION`. Each of these could lift the cap, run a different binary or login, or relax a check, so no local program or page served from localhost may set them through the API. The API never writes them, and the viewer never sends them. The API still validates them when a request includes them, and accepts the value already stored.
+- **File or environment only:** switching `CLAUDE_MEM_PROVIDER` to or from `codex`, and `CLAUDE_MEM_CODEX_PATH`, `CLAUDE_MEM_CODEX_HOME`, `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`, `CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS`, `CLAUDE_MEM_CODEX_TRANSPORT`, `CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT`, `CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS` and `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION`. Each of these could lift the cap, discard waiting observations (a queue cap of `50`) or let them pile up without limit (`0`), run a different binary or login, or relax a check, so no local program or page served from localhost may set them through the API. The API never writes them, and the viewer never sends them. The API still validates them when a request includes them, and accepts the value already stored.
 
 A model or number that already matches the stored value is accepted back as it is, and the viewer sends only the Codex values you change. So the viewer keeps saving even when the file holds a model outside the allowlist or a number outside its range; such values can only be *set* in the file. When the worker would not use a stored value as written (a number out of range or written as a bare JSON number, an invalid model id, an unknown level), the viewer says so under the field and names the value the worker uses instead. A provider or Codex value that comes from the worker's environment is shown, but the viewer does not copy it into `settings.json` unless you change it.
 
@@ -198,12 +199,37 @@ Also keep batching on (the default `4`), effort `low`, field compression off, an
 
 **When the cap is reached** the observer pauses exactly as it does at a real usage limit: new observations are held in the worker's memory, the session-start message says memory is paused and until when, and the worker resumes on its own when the oldest counted call leaves the 5-hour window. The count lives in `~/.claude-mem/codex-usage.json` (timestamps and token counts only, never content), so it survives a worker restart. The cap is re-read on every call: raising it, or setting it to `0`, lifts a pause at the next captured tool call instead of waiting out the old window.
 
+### How batching works
+
+Every call is one plan message, so the observer sends several captured tool uses in one call when it can: up to `CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS` (default `4`) and `CLAUDE_MEM_CODEX_BATCH_MAX_CHARS` of new text.
+
+- **One group per call.** A call carries the tool uses of one prompt, one agent (the main session or one subagent) and one working directory. Its reply is stored under one prompt number, one agent and one project, so mixing groups would file some observations under the wrong one.
+- **Groups are picked out of the queue.** When subagents run in parallel, their tool uses interleave in the queue (`A1 B1 A2 C1 B2 …`). A call takes the oldest waiting tool use and the next waiting ones of the same group (`A1 A2`), and skips the others. What it skips stays queued in its order and goes out in later calls (`B1 B2`, then `C1`). A call looks at most 256 waiting tool uses ahead.
+- **Order within a group is kept.** Tool uses of one group are sent oldest first, and a call never skips one of its own group: when the next one would pass the character budget, the call ends and that tool use is sent first in its group's next call.
+- **A summary request is a barrier.** Nothing queued behind a session summary request is sent before it, so the summary is written after exactly the work queued ahead of it.
+- **A short wait only when idle.** When nothing else is queued, a call waits up to `CLAUDE_MEM_CODEX_BATCH_LINGER_MS` for more tool uses of its group, and stops waiting as soon as something arrives that it cannot take. A backlog is sent at once.
+
+`ai.codex.metrics.observations` shows the result: observations per call and the batch-size histogram.
+
+### The waiting-observation cap
+
+Tool uses waiting for Codex are held only in the worker's memory, by design (the transcripts, not this queue, are the durable record). While the observer is paused (a usage limit, the local cap, a setup problem) they keep piling up: a few hours of busy work can leave thousands waiting, which would cost hundreds or thousands of plan messages once the pause ends, and a worker restart throws them away anyway.
+
+`CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS` (default `500`) bounds that pile for each session. When a newly captured tool use takes a session past the cap, the **oldest** waiting tool uses of that session are dropped until it is back at the cap. They are never sent and never written to memory. Never dropped:
+
+- tool uses already being sent to Codex;
+- session summary requests.
+
+A dropped tool use is not queued again if the same tool call is reported twice. The cap applies only while Codex is the provider, and it is re-read every few seconds, so a change binds without a restart. `0` turns it off, and so does a negative value (read as `0`); any positive value is at least `50`. It is file/env only: through the unauthenticated settings API a page could otherwise set it to `50` and throw away nearly everything you capture.
+
+The worker logs a warning the first time a session drops tool uses and then once per 100 drops, and counts them in `ai.codex.metrics.queuedObservationsDropped`.
+
 ### Watching your usage
 
 `GET /api/health` on the worker port includes, while Codex is the provider:
 
 - `ai.codex.budget`: the cap in force, calls used in the current 5-hour window, calls remaining, when the next call is allowed if the cap is spent, and the token totals of the window.
-- `ai.codex.metrics`: calls by kind since the worker started, observations per call and the batch-size histogram (batching), calls saved by the deferred init and by cutting oversized fields instead of compressing them (`skipped.init`, `skipped.fieldCompression`), token totals, blocked tool attempts, and calls the cap refused.
+- `ai.codex.metrics`: calls by kind since the worker started, observations per call and the batch-size histogram (batching), calls saved by the deferred init and by cutting oversized fields instead of compressing them (`skipped.init`, `skipped.fieldCompression`), token totals, blocked tool attempts, calls the cap refused, and waiting tool uses the waiting-observation cap dropped (`queuedObservationsDropped`).
 
 The worker also logs a `Codex observer usage` line every 15 minutes when those counters changed.
 
@@ -294,7 +320,7 @@ Each self-check failure is also written to `~/.claude-mem/observer-audit.log` as
 While paused, observations are held in the worker's memory and no Codex call is made. When the pause ends, the worker sends one session as a probe; once that succeeds, every waiting session is written. Nothing else is needed. If the reason was a plan without Codex ("To use Codex with your ChatGPT plan, upgrade to Plus"), that is a setup problem, not a pause: upgrade the plan or change `CLAUDE_MEM_PROVIDER` in `settings.json`.
 
 <Warning>
-**A worker restart loses held observations.** The queue of paused observations and the resume timers live only in the worker's memory. Restarting during a pause (or a setup problem) discards what was held; the pause itself survives the restart. Leave the worker running and let it resume on its own.
+**A worker restart loses held observations.** The queue of paused observations and the resume timers live only in the worker's memory. Restarting during a pause (or a setup problem) discards what was held; the pause itself survives the restart. Leave the worker running and let it resume on its own. How much a session may hold meanwhile is bounded by `CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS` (see [The waiting-observation cap](#the-waiting-observation-cap)).
 </Warning>
 
 ### "Codex jail directory is not safe" (`codex_jail_unsafe`)

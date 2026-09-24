@@ -61,6 +61,7 @@ See [OpenRouter Provider](usage/openrouter-provider) for detailed configuration,
 | `CLAUDE_MEM_CODEX_BATCH_LINGER_MS`           | `2000`         | Wait for one more tool use while the queue is empty (0–30000) |
 | `CLAUDE_MEM_CODEX_FIELD_COMPRESSION`         | `false`        | `true` spends an extra call per oversized tool field instead of cutting it |
 | `CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H`          | `0`            | Local cap on Codex calls per sliding 5 hours; `0` = no cap. **File/env only** |
+| `CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS`   | `500`          | Tool uses one session may hold waiting for Codex before the oldest are dropped; `0` = no cap, else 50–100000. **File/env only** |
 | `CLAUDE_MEM_CODEX_PATH`                      | —              | Absolute path to the codex binary; empty = search `PATH`. **File/env only** |
 | `CLAUDE_MEM_CODEX_HOME`                      | —              | `CODEX_HOME` (login) for the observer; empty = `$CODEX_HOME` or `~/.codex`. **File/env only** |
 | `CLAUDE_MEM_CODEX_ALLOW_UNTESTED_VERSION`    | `false`        | Accept a codex-cli version outside the tested range. **File/env only** |
@@ -392,7 +393,7 @@ Token economics help you understand the value of cached observations vs. re-read
 |---------|---------|-------------|
 | **AI Provider** | Claude | Claude, Gemini, OpenRouter, or Codex CLI. The Codex option is disabled unless `settings.json` (or the worker environment) already selects it, and a Codex install cannot switch away here (see [Codex Provider](usage/codex-provider)) |
 | **Model** | sonnet | AI model for generating observations |
-| **Codex settings** | — | Shown when Codex is the provider: model, reasoning effort, verbosity, conversation budget, batch size, timeout. The 5-hour call cap is shown read-only |
+| **Codex settings** | — | Shown when Codex is the provider: model, reasoning effort, verbosity, conversation budget, batch size, timeout. The 5-hour call cap and the waiting-observation cap are shown read-only |
 | **Worker Port** | `37700 + (uid % 100)` | Port for background worker service (override with `CLAUDE_MEM_WORKER_PORT`) |
 | **MCP search server** | true | Enable Model Context Protocol search tools |
 | **Include last summary** | false | Add previous session's summary to context |

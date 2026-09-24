@@ -29,8 +29,9 @@
  *   - `freshGenerationOnStart`: a restarted generator does not re-send the
  *     turns a paused run left behind (continuity comes from the session-start
  *     context the init turn carries);
- *   - batching (`observationBatchPolicy`, CLAUDE_MEM_CODEX_BATCH_*): consecutive
- *     observations of one prompt/agent/cwd share one exec;
+ *   - batching (`observationBatchPolicy`, CLAUDE_MEM_CODEX_BATCH_*): queued
+ *     observations of one prompt/agent/cwd share one exec, even when other
+ *     subagents' events interleave with them;
  *   - the local 5-hour exec budget (codex-budget.ts,
  *     CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H), composed onto the pre-flight seam
  *     AFTER the M3 quota circuit, so a spent budget pauses and resumes through
@@ -113,6 +114,9 @@ export const CODEX_CONFIG_BOUNDS = Object.freeze({
   batchMaxChars: { min: 8_000, max: 96_000, fallback: 48_000 },
   batchLingerMs: { min: 0, max: 30_000, fallback: 2_000 },
   maxExecsPer5h: { min: 0, max: Number.MAX_SAFE_INTEGER, fallback: 0 },
+  // 0 turns the cap off; any other value is at least `minCap`, so a value
+  // like "5" cannot discard nearly everything that is captured.
+  maxQueuedObservations: { min: 0, minCap: 50, max: 100_000, fallback: 500 },
   quotaReservePercent: { min: 0, max: 50, fallback: 0 },
   rateLimitProbeMs: { min: 60_000, max: 3_600_000, fallback: 300_000 },
 });
@@ -248,6 +252,50 @@ export function resolveCodexMaxExecsPer5h(): number {
     SettingsDefaultsManager.loadFromFile(paths.settings()).CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H,
     CODEX_CONFIG_BOUNDS.maxExecsPer5h,
   );
+}
+
+/**
+ * The per-session cap on waiting observations as it applies right now
+ * (CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS, file/env only), or 0 — no cap —
+ * while codex is not the provider (the same rule as isCodexSelected) or the
+ * setting is 0. Same bounds and warn-once handling as the other codex numbers,
+ * plus one rule of its own: a value from 1 to 49 is raised to 50. Never
+ * throws; SessionManager asks it (through codexObservationQueueCapReader)
+ * after every enqueued observation.
+ */
+export function resolveCodexObservationQueueCap(): number {
+  const settings = SettingsDefaultsManager.loadFromFile(paths.settings());
+  if (settings.CLAUDE_MEM_PROVIDER !== 'codex') return 0;
+  const bounds = CODEX_CONFIG_BOUNDS.maxQueuedObservations;
+  const cap = clampedInt('CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', settings.CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS, bounds);
+  if (cap > 0 && cap < bounds.minCap) {
+    warnOnce('CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS', String(cap), bounds.minCap);
+    return bounds.minCap;
+  }
+  return cap;
+}
+
+/** How long codexObservationQueueCapReader reuses one settings read. */
+export const CODEX_QUEUE_CAP_CACHE_MS = 5_000;
+
+/**
+ * resolveCodexObservationQueueCap behind a short cache, for the enqueue path:
+ * a burst of captured tool calls reads settings.json at most once per
+ * `ttlMs`, and a changed setting or provider still binds within seconds.
+ */
+export function codexObservationQueueCapReader(
+  ttlMs: number = CODEX_QUEUE_CAP_CACHE_MS,
+  resolve: () => number = resolveCodexObservationQueueCap,
+  now: () => number = Date.now,
+): () => number {
+  let cached: { cap: number; atMs: number } | null = null;
+  return () => {
+    const nowMs = now();
+    if (cached === null || nowMs - cached.atMs >= ttlMs) {
+      cached = { cap: resolve(), atMs: nowMs };
+    }
+    return cached.cap;
+  };
 }
 
 /**
@@ -915,8 +963,11 @@ export class CodexProvider extends OpenAICompatibleProvider<CodexConfig> impleme
   }
 
   /**
-   * M4 hook 10: consecutive observations of one prompt/agent/cwd share one
-   * exec, within CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS (default 4) and
+   * M4 hook 10: queued observations of one prompt/agent/cwd share one exec,
+   * picked oldest first out of the interleaved queue (other groups skipped,
+   * never past a summarize, never out of order within the group — see
+   * SessionManager.claimObservationBatch), within
+   * CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS (default 4) and
    * CLAUDE_MEM_CODEX_BATCH_MAX_CHARS (48,000 rendered characters), lingering up
    * to CLAUDE_MEM_CODEX_BATCH_LINGER_MS (2 s) only while the queue is idle.
    * A maximum of 1 turns batching off entirely: no policy, so the base class

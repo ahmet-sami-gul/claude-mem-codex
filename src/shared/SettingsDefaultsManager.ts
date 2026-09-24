@@ -40,9 +40,10 @@ export interface SettingsDefaults {
   // here — loadFromFile assigns JSON values without type-checking, so the real
   // guard is CodexProvider.getConfig(), which parses, clamps and falls back to
   // the default on anything it cannot use. The cost levers (PATH, HOME,
-  // MAX_EXECS_PER_5H, TRANSPORT, QUOTA_RESERVE_PERCENT, RATE_LIMIT_PROBE_MS,
-  // ALLOW_UNTESTED_VERSION) are file/env only: POST /api/settings is
-  // unauthenticated, so they are deliberately off its write allowlist.
+  // MAX_EXECS_PER_5H, MAX_QUEUED_OBSERVATIONS, TRANSPORT, QUOTA_RESERVE_PERCENT,
+  // RATE_LIMIT_PROBE_MS, ALLOW_UNTESTED_VERSION) are file/env only: POST
+  // /api/settings is unauthenticated, so they are deliberately off its write
+  // allowlist.
   CLAUDE_MEM_CODEX_PATH: string;
   CLAUDE_MEM_CODEX_HOME: string;
   CLAUDE_MEM_CODEX_MODEL: string;
@@ -56,6 +57,7 @@ export interface SettingsDefaults {
   CLAUDE_MEM_CODEX_BATCH_LINGER_MS: string;
   CLAUDE_MEM_CODEX_FIELD_COMPRESSION: string;
   CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: string;
+  CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: string;
   CLAUDE_MEM_CODEX_TRANSPORT: string;
   CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT: string;
   CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS: string;
@@ -222,11 +224,12 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_CODEX_VERBOSITY: 'low',  // The only output-length lever codex exposes
     CLAUDE_MEM_CODEX_TIMEOUT_MS: '180000',  // Per-exec deadline (30000-600000), independent of CLAUDE_MEM_LLM_TIMEOUT_MS
     CLAUDE_MEM_CODEX_MAX_CONVERSATION_CHARS: '120000',  // Codex-specific recycle budget (40000-400000)
-    CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS: '4',  // Contiguous observations per exec (1-12); 1 disables batching (same prompt/agent/cwd, FIFO)
+    CLAUDE_MEM_CODEX_BATCH_MAX_OBSERVATIONS: '4',  // Observations per exec (1-12); 1 disables batching (same prompt/agent/cwd, in order within that group)
     CLAUDE_MEM_CODEX_BATCH_MAX_CHARS: '48000',  // New envelope characters per batch (8000-96000)
     CLAUDE_MEM_CODEX_BATCH_LINGER_MS: '2000',  // Wait for one more event only while the queue is empty (0-30000)
     CLAUDE_MEM_CODEX_FIELD_COMPRESSION: 'false',  // false = use the prompt's head/tail elision instead of a second exec per field
     CLAUDE_MEM_CODEX_MAX_EXECS_PER_5H: '0',  // 0 = no local cap (file/env only)
+    CLAUDE_MEM_CODEX_MAX_QUEUED_OBSERVATIONS: '500',  // Waiting observations per session before the oldest are dropped; 0 = no cap, else 50-100000 (file/env only)
     CLAUDE_MEM_CODEX_TRANSPORT: 'exec',  // Phase 1 ships 'exec'; 'exec-resume' / 'app-server' are reserved (file/env only)
     CLAUDE_MEM_CODEX_QUOTA_RESERVE_PERCENT: '0',  // Share left to interactive Codex (0-50), Phase 2 (file/env only)
     CLAUDE_MEM_CODEX_RATE_LIMIT_PROBE_MS: '300000',  // Rate-limit probe cache (60000-3600000), Phase 2

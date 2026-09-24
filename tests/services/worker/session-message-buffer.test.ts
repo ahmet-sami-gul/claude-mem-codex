@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { SessionMessageBuffer } from '../../../src/services/worker/SessionMessageBuffer.js';
+import { CLAIM_MATCHING_LOOKAHEAD, SessionMessageBuffer } from '../../../src/services/worker/SessionMessageBuffer.js';
 import type { PendingMessage, PendingMessageWithId } from '../../../src/services/worker-types.js';
 
 function obs(toolName: string, toolUseId?: string): PendingMessage {
@@ -125,10 +125,13 @@ describe('SessionMessageBuffer (in-RAM observation buffer)', () => {
   });
 });
 
-describe('SessionMessageBuffer.claimContiguous (M4 observation batching)', () => {
+describe('SessionMessageBuffer.claimMatching (M4 observation batching)', () => {
   function summarize(): PendingMessage {
     return { type: 'summarize', last_assistant_message: 'done' };
   }
+
+  const isSummarize = (m: PendingMessageWithId): boolean => m.type !== 'observation';
+  const all = { isBarrier: () => false, accept: () => true };
 
   /** Claim the head of the queue the way the drain does, via a one-shot drain. */
   async function claimHead(buffer: SessionMessageBuffer, sessionDbId: number): Promise<PendingMessageWithId> {
@@ -149,8 +152,11 @@ describe('SessionMessageBuffer.claimContiguous (M4 observation batching)', () =>
     const head = await claimHead(buffer, 1);
     expect(head.tool_name).toBe('A');
 
-    const claimed = buffer.claimContiguous(1, () => true, 10);
+    const offered: string[] = [];
+    const claimed = buffer.claimMatching(1, { ...all, accept: m => { offered.push(m.tool_name!); return true; }, max: 10 });
     expect(claimed.map(m => m.tool_name)).toEqual(['B', 'C']);
+    // The claimed head is neither offered nor a barrier.
+    expect(offered).toEqual(['B', 'C']);
     // Same view the drain yields: persistent id + original enqueue time.
     expect(claimed[0]._persistentId).toBeGreaterThan(head._persistentId);
     expect(typeof claimed[0]._originalTimestamp).toBe('number');
@@ -159,33 +165,92 @@ describe('SessionMessageBuffer.claimContiguous (M4 observation batching)', () =>
     expect(buffer.getPendingCount(1)).toBe(3);
   });
 
-  test('stops at the first rejected message and never claims past it (summarize is never skipped)', () => {
+  test('skips what accept rejects and keeps walking; the skipped messages stay queued in order', async () => {
     const buffer = new SessionMessageBuffer();
-    buffer.enqueue(1, obs('A'));
-    buffer.enqueue(1, summarize());
-    buffer.enqueue(1, obs('B'));
+    for (const name of ['A1', 'B1', 'A2', 'C1', 'B2', 'A3']) buffer.enqueue(1, obs(name));
 
-    const seen: string[] = [];
-    const claimed = buffer.claimContiguous(1, (m) => {
-      seen.push(m.type === 'summarize' ? 'summarize' : m.tool_name!);
-      return m.type === 'observation';
-    }, 10);
+    const claimed = buffer.claimMatching(1, { isBarrier: isSummarize, accept: m => m.tool_name!.startsWith('A'), max: 10 });
 
-    expect(claimed.map(m => m.tool_name)).toEqual(['A']);
-    // B sits behind the summarize request, so it is not even offered.
-    expect(seen).toEqual(['A', 'summarize']);
-    expect(buffer.getUnclaimedCount(1)).toBe(2);
+    expect(claimed.map(m => m.tool_name)).toEqual(['A1', 'A2', 'A3']);
+    expect(buffer.getUnclaimedCount(1)).toBe(3);
+    const rest = await drainAll(buffer, 1);
+    expect(rest.map(m => m.tool_name)).toEqual(['B1', 'C1', 'B2']);
   });
 
-  test('respects max and does not consult accept once the batch is full', () => {
+  test('stops at the first barrier and never claims or offers anything past it (summarize is never skipped)', () => {
     const buffer = new SessionMessageBuffer();
-    for (const name of ['A', 'B', 'C', 'D']) buffer.enqueue(1, obs(name));
-    let calls = 0;
-    const claimed = buffer.claimContiguous(1, () => { calls++; return true; }, 2);
-    expect(claimed.map(m => m.tool_name)).toEqual(['A', 'B']);
-    expect(calls).toBe(2);
-    expect(buffer.claimContiguous(1, () => true, 0)).toEqual([]);
-    expect(buffer.claimContiguous(99, () => true, 5)).toEqual([]);
+    buffer.enqueue(1, obs('A1'));
+    buffer.enqueue(1, obs('B1'));
+    buffer.enqueue(1, summarize());
+    buffer.enqueue(1, obs('A2'));
+
+    const offered: string[] = [];
+    const barriers: string[] = [];
+    const claimed = buffer.claimMatching(1, {
+      isBarrier: m => { barriers.push(m.type === 'summarize' ? 'summarize' : m.tool_name!); return isSummarize(m); },
+      accept: m => { offered.push(m.tool_name!); return m.tool_name!.startsWith('A'); },
+      max: 10,
+    });
+
+    expect(claimed.map(m => m.tool_name)).toEqual(['A1']);
+    // B1 is skipped, the summarize ends the walk, and A2 behind it is not even looked at.
+    expect(barriers).toEqual(['A1', 'B1', 'summarize']);
+    expect(offered).toEqual(['A1', 'B1']);
+    expect(buffer.getUnclaimedCount(1)).toBe(3);
+  });
+
+  test('a claimed summarize is in flight, not a barrier', async () => {
+    const buffer = new SessionMessageBuffer();
+    buffer.enqueue(1, summarize());
+    buffer.enqueue(1, obs('A'));
+    const head = await claimHead(buffer, 1);
+    expect(head.type).toBe('summarize');
+
+    const claimed = buffer.claimMatching(1, { isBarrier: isSummarize, accept: () => true, max: 10 });
+    expect(claimed.map(m => m.tool_name)).toEqual(['A']);
+  });
+
+  test('examines at most `lookahead` unclaimed messages', () => {
+    const buffer = new SessionMessageBuffer();
+    for (const name of ['B1', 'B2', 'B3', 'A1', 'A2']) buffer.enqueue(1, obs(name));
+    const accept = (m: PendingMessageWithId): boolean => m.tool_name!.startsWith('A');
+
+    let offered = 0;
+    const claimed = buffer.claimMatching(1, {
+      isBarrier: isSummarize,
+      accept: m => { offered++; return accept(m); },
+      max: 10,
+      lookahead: 4,
+    });
+    expect(claimed.map(m => m.tool_name)).toEqual(['A1']);
+    expect(offered).toBe(4);
+
+    // Claimed messages do not count against the lookahead.
+    expect(buffer.claimMatching(1, { isBarrier: isSummarize, accept, max: 10, lookahead: 4 }).map(m => m.tool_name)).toEqual(['A2']);
+  });
+
+  test('defaults the lookahead to CLAIM_MATCHING_LOOKAHEAD', () => {
+    const buffer = new SessionMessageBuffer();
+    for (let i = 0; i < CLAIM_MATCHING_LOOKAHEAD; i++) buffer.enqueue(1, obs(`B${i}`));
+    buffer.enqueue(1, obs('A-far'));
+    expect(buffer.claimMatching(1, { isBarrier: isSummarize, accept: m => m.tool_name === 'A-far', max: 10 })).toEqual([]);
+    buffer.confirm(buffer.claimMatching(1, { ...all, max: 1 })[0]._persistentId);
+    expect(buffer.claimMatching(1, { isBarrier: isSummarize, accept: m => m.tool_name === 'A-far', max: 10 }).map(m => m.tool_name)).toEqual(['A-far']);
+  });
+
+  test('respects max, and calls accept once per message in queue order, never once the batch is full', () => {
+    const buffer = new SessionMessageBuffer();
+    for (const name of ['A', 'B', 'C', 'D', 'E']) buffer.enqueue(1, obs(name));
+    const offered: string[] = [];
+    const claimed = buffer.claimMatching(1, {
+      isBarrier: isSummarize,
+      accept: m => { offered.push(m.tool_name!); return m.tool_name !== 'B'; },
+      max: 2,
+    });
+    expect(claimed.map(m => m.tool_name)).toEqual(['A', 'C']);
+    expect(offered).toEqual(['A', 'B', 'C']);
+    expect(buffer.claimMatching(1, { ...all, max: 0 })).toEqual([]);
+    expect(buffer.claimMatching(99, { ...all, max: 5 })).toEqual([]);
   });
 
   test('notifies the mutation hook once per claim that took something', () => {
@@ -194,9 +259,9 @@ describe('SessionMessageBuffer.claimContiguous (M4 observation batching)', () =>
     buffer.enqueue(1, obs('A'));
     buffer.enqueue(1, obs('B'));
     mutations = 0;
-    buffer.claimContiguous(1, () => true, 5);
+    buffer.claimMatching(1, { ...all, max: 5 });
     expect(mutations).toBe(1);
-    buffer.claimContiguous(1, () => true, 5);
+    buffer.claimMatching(1, { ...all, max: 5 });
     expect(mutations).toBe(1);
   });
 
@@ -205,11 +270,70 @@ describe('SessionMessageBuffer.claimContiguous (M4 observation batching)', () =>
     buffer.enqueue(1, obs('A'));
     buffer.enqueue(1, obs('B'));
     buffer.enqueue(1, obs('C'));
-    const claimed = buffer.claimContiguous(1, () => true, 2);
+    const claimed = buffer.claimMatching(1, { ...all, max: 2 });
     expect(buffer.resetClaimed(1)).toBe(2);
     const redrained = await drainAll(buffer, 1);
     expect(redrained.map(m => m.tool_name)).toEqual(['A', 'B', 'C']);
     for (const m of claimed) expect(buffer.confirm(m._persistentId)).toBe(1);
+    expect(buffer.getPendingCount(1)).toBe(1);
+  });
+});
+
+describe('SessionMessageBuffer.dropOldestUnclaimedObservations (codex queue cap)', () => {
+  function summarize(): PendingMessage {
+    return { type: 'summarize', last_assistant_message: 'done' };
+  }
+
+  test('drops the oldest unclaimed observations down to `keep`, and nothing when under it', async () => {
+    let mutations = 0;
+    const buffer = new SessionMessageBuffer(() => { mutations++; });
+    for (const name of ['A', 'B', 'C', 'D', 'E']) buffer.enqueue(1, obs(name));
+    mutations = 0;
+
+    expect(buffer.dropOldestUnclaimedObservations(1, 5)).toBe(0);
+    expect(mutations).toBe(0);
+
+    expect(buffer.dropOldestUnclaimedObservations(1, 2)).toBe(3);
+    expect(mutations).toBe(1);
+    expect((await drainAll(buffer, 1)).map(m => m.tool_name)).toEqual(['D', 'E']);
+    expect(buffer.dropOldestUnclaimedObservations(99, 0)).toBe(0);
+  });
+
+  test('never drops claimed (in-flight) messages or anything but an observation', async () => {
+    const buffer = new SessionMessageBuffer();
+    buffer.enqueue(1, obs('A'));
+    buffer.enqueue(1, obs('B'));
+    // A and B are in flight.
+    buffer.claimMatching(1, { isBarrier: () => false, accept: () => true, max: 2 });
+    buffer.enqueue(1, summarize());
+    buffer.enqueue(1, obs('C'));
+    buffer.enqueue(1, { type: 'init' } as unknown as PendingMessage);
+    buffer.enqueue(1, obs('D'));
+    buffer.enqueue(1, obs('E'));
+
+    expect(buffer.dropOldestUnclaimedObservations(1, 1)).toBe(2);
+
+    expect(buffer.getPendingCount(1)).toBe(5);
+    expect(buffer.peekTypes(1)).toEqual([
+      { message_type: 'observation', tool_name: 'A' },
+      { message_type: 'observation', tool_name: 'B' },
+      { message_type: 'summarize', tool_name: null },
+      { message_type: 'init', tool_name: null },
+      { message_type: 'observation', tool_name: 'E' },
+    ]);
+    // Even with no room left, only unclaimed observations go.
+    expect(buffer.dropOldestUnclaimedObservations(1, 0)).toBe(1);
+    expect(buffer.getPendingCount(1)).toBe(4);
+    expect(buffer.getUnclaimedCount(1)).toBe(2);
+  });
+
+  test('keeps a dropped toolUseId in the dedup set', () => {
+    const buffer = new SessionMessageBuffer();
+    buffer.enqueue(1, obs('A', 'tool-a'));
+    buffer.enqueue(1, obs('B', 'tool-b'));
+    expect(buffer.dropOldestUnclaimedObservations(1, 1)).toBe(1);
+    // A re-delivered duplicate of the dropped tool use is still suppressed.
+    expect(buffer.enqueue(1, obs('A', 'tool-a'))).toBe(0);
     expect(buffer.getPendingCount(1)).toBe(1);
   });
 });
