@@ -1,11 +1,11 @@
 {
   "name": "claude-mem",
-  "version": "13.25.504",
-  "description": "Memory compression system for Claude Code - persist context across sessions",
+  "version": "13.25.505",
+  "description": "Memory compression system for Claude Code - persist context across sessions (claude-mem-codex: unofficial fork of claude-mem by Alex Newman that adds a Codex CLI observer provider)",
   "author": {
-    "name": "Alex Newman"
+    "name": "Ahmet Sami Gül (fork of claude-mem by Alex Newman)"
   },
-  "repository": "https://github.com/thedotmack/claude-mem",
+  "repository": "https://github.com/ahmet-sami-gul/claude-mem-codex",
   "license": "Apache-2.0",
   "keywords": [
     "claude",
@@ -20,5 +20,5 @@
     "typescript",
     "nodejs"
   ],
-  "homepage": "https://github.com/thedotmack/claude-mem#readme"
+  "homepage": "https://github.com/ahmet-sami-gul/claude-mem-codex#readme"
 }

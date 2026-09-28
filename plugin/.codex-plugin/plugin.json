@@ -1,13 +1,13 @@
 {
   "name": "claude-mem",
-  "version": "13.25.504",
-  "description": "Memory compression system for Claude Code - persist context across sessions",
+  "version": "13.25.505",
+  "description": "Memory compression system for Claude Code - persist context across sessions (claude-mem-codex: unofficial fork of claude-mem by Alex Newman that adds a Codex CLI observer provider)",
   "author": {
-    "name": "Alex Newman",
-    "url": "https://github.com/thedotmack"
+    "name": "Ahmet Sami Gül (fork of claude-mem by Alex Newman)",
+    "url": "https://github.com/ahmet-sami-gul"
   },
-  "homepage": "https://github.com/thedotmack/claude-mem#readme",
-  "repository": "https://github.com/thedotmack/claude-mem",
+  "homepage": "https://github.com/ahmet-sami-gul/claude-mem-codex#readme",
+  "repository": "https://github.com/ahmet-sami-gul/claude-mem-codex",
   "license": "Apache-2.0",
   "keywords": [
     "claude",
@@ -26,16 +26,16 @@
   "mcpServers": "./.mcp.json",
   "hooks": "./hooks/codex-hooks.json",
   "interface": {
-    "displayName": "claude-mem",
+    "displayName": "claude-mem-codex",
     "shortDescription": "Persistent memory and context compression across coding sessions.",
-    "longDescription": "claude-mem captures coding-session activity, compresses it into reusable observations, and injects relevant context back into future Claude Code and Codex-compatible sessions.",
-    "developerName": "Alex Newman",
+    "longDescription": "claude-mem captures coding-session activity, compresses it into reusable observations, and injects relevant context back into future Claude Code and Codex-compatible sessions. claude-mem-codex is an unofficial fork of claude-mem by Alex Newman that adds a locked-down Codex CLI observer provider; it is not affiliated with or endorsed by the claude-mem project, Anthropic or OpenAI.",
+    "developerName": "Ahmet Sami Gül (fork of claude-mem by Alex Newman)",
     "category": "Productivity",
     "capabilities": [
       "Interactive",
       "Write"
     ],
-    "websiteURL": "https://github.com/thedotmack/claude-mem",
+    "websiteURL": "https://github.com/ahmet-sami-gul/claude-mem-codex",
     "defaultPrompt": [
       "Find what I already learned about this codebase before I start a new task.",
       "Show recent observations related to the files I am editing right now.",
