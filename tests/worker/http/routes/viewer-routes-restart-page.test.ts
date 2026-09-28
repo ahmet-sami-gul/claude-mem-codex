@@ -60,9 +60,13 @@ describe('GET /restart', () => {
     expect(html).not.toContain('//cdn');
   });
 
-  it('sends the reader to doctor when the worker does not come back', () => {
+  // claude-mem-codex fork: the upstream `npx claude-mem doctor` cannot see this
+  // install, so the fallback is a new session (its hooks start the worker) and the logs.
+  it('sends the reader to a new session and the logs when the worker does not come back', () => {
     const { html } = renderRestartPage();
-    expect(html).toContain('npx claude-mem doctor');
+    expect(html).toContain("status.textContent = 'Still not answering. Start a new Claude Code session");
+    expect(html).toContain('~/.claude-mem/logs');
+    expect(html).not.toContain("'Still not answering. Run: npx claude-mem");
   });
 
   // A click requirement alone does not stop clickjacking: an attacker who can

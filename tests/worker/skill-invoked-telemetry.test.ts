@@ -13,6 +13,7 @@ const savedEnv: Record<string, string | undefined> = {};
 const ENV_KEYS = [
   'CLAUDE_MEM_TELEMETRY',
   'CLAUDE_MEM_TELEMETRY_DEBUG',
+  'CLAUDE_MEM_TELEMETRY_KEY',
   'DO_NOT_TRACK',
 ];
 
@@ -31,6 +32,8 @@ describe('skill_invoked telemetry', () => {
   beforeEach(() => {
     for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
     process.env.CLAUDE_MEM_TELEMETRY = '1';
+    // claude-mem-codex fork: no project key ships; the SDK is mocked in preload.
+    process.env.CLAUDE_MEM_TELEMETRY_KEY = 'test-telemetry-key';
     delete process.env.CLAUDE_MEM_TELEMETRY_DEBUG;
     delete process.env.DO_NOT_TRACK;
 
@@ -171,6 +174,8 @@ describe('skill_invoked from session-init slash prompts', () => {
   beforeEach(async () => {
     for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
     process.env.CLAUDE_MEM_TELEMETRY = '1';
+    // claude-mem-codex fork: no project key ships; the SDK is mocked in preload.
+    process.env.CLAUDE_MEM_TELEMETRY_KEY = 'test-telemetry-key';
     delete process.env.CLAUDE_MEM_TELEMETRY_DEBUG;
     delete process.env.DO_NOT_TRACK;
 

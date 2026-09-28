@@ -24,7 +24,10 @@ const CODEX_TRANSCRIPT_WATCH_CONFIG_PATH = paths.transcriptsConfig();
 const CODEX_CONFIG_PATH = path.join(CODEX_DIR, 'config.toml');
 const MARKETPLACE_NAME = 'claude-mem-local';
 const CODEX_PLUGIN_ID = `claude-mem@${MARKETPLACE_NAME}`;
-const LEGACY_CODEX_PLUGIN_IDS = ['claude-mem@thedotmack'];
+// Older Codex plugin ids to disable on install. claude-mem-codex fork: the
+// fork has only ever used claude-mem@claude-mem-local in Codex, and upstream's
+// legacy id belongs to an upstream install, so there is nothing to disable.
+const LEGACY_CODEX_PLUGIN_IDS: readonly string[] = [];
 const MIN_CODEX_MARKETPLACE_VERSION = '0.128.0';
 const REQUIRED_MARKETPLACE_FILES = [
   path.join('.agents', 'plugins', 'marketplace.json'),

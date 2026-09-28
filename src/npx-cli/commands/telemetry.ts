@@ -1,14 +1,17 @@
 /**
  * `npx claude-mem telemetry [status|enable|disable]` — manage anonymous usage
- * analytics. Telemetry is ON by default (opt-out): anonymous events only,
- * identified by a random install UUID. Turn it off anytime with
- * `telemetry disable`, CLAUDE_MEM_TELEMETRY=0, or DO_NOT_TRACK=1.
+ * analytics. claude-mem-codex fork: telemetry is OFF by default (opt-in) and
+ * no PostHog project key ships, so events are sent only after an explicit
+ * opt-in AND with CLAUDE_MEM_TELEMETRY_KEY pointing at a project of your own.
+ * Anonymous events only, identified by a random install UUID. Turn it off
+ * anytime with `telemetry disable`, CLAUDE_MEM_TELEMETRY=0, or DO_NOT_TRACK=1.
  *
- * Full privacy documentation: https://docs.claude-mem.ai/telemetry
+ * Privacy documentation: https://github.com/ahmet-sami-gul/claude-mem-codex/blob/HEAD/docs/public/telemetry.mdx
  */
 
 import * as p from '@clack/prompts';
 import { styleText } from 'node:util';
+import { getTelemetryApiKey, getTelemetryHost } from '../../services/telemetry/common.js';
 import {
   explainTelemetryConsent,
   loadTelemetryConfig,
@@ -18,7 +21,7 @@ import {
   type TelemetryConsentSource,
 } from '../../services/telemetry/consent.js';
 
-const DOCS_URL = 'https://docs.claude-mem.ai/telemetry';
+const DOCS_URL = 'https://github.com/ahmet-sami-gul/claude-mem-codex/blob/HEAD/docs/public/telemetry.mdx';
 
 const COLLECTED_FIELDS = [
   'version          claude-mem version (e.g. 13.4.2)',
@@ -102,13 +105,13 @@ const SOURCE_LABELS: Record<TelemetryConsentSource, string> = {
   DO_NOT_TRACK: 'DO_NOT_TRACK environment variable',
   env: 'CLAUDE_MEM_TELEMETRY environment variable',
   config: 'telemetry.json config file',
-  default: 'default (on — no opt-out recorded)',
+  default: 'default (off — no opt-in recorded)',
 };
 
 function printTelemetryUsage(): void {
   console.error(`Usage: ${styleText('bold', 'npx claude-mem telemetry [status|enable|disable]')}`);
   console.error('  status   Show whether telemetry is on and which setting decided it (default)');
-  console.error('  enable   Turn anonymous usage analytics back on (interactive)');
+  console.error('  enable   Opt in to anonymous usage analytics (interactive; needs CLAUDE_MEM_TELEMETRY_KEY)');
   console.error('  disable  Opt out of telemetry');
   console.error(`Docs: ${DOCS_URL}`);
 }
@@ -121,6 +124,12 @@ function runTelemetryStatus(): void {
   const state = enabled ? styleText('green', 'ENABLED') : styleText('yellow', 'DISABLED');
   console.log(`${styleText('bold', 'Telemetry:')} ${state}`);
   console.log(`${styleText('bold', 'Decided by:')} ${SOURCE_LABELS[source]}`);
+  const apiKey = getTelemetryApiKey();
+  console.log(
+    `${styleText('bold', 'Destination:')} ${apiKey
+      ? getTelemetryHost()
+      : styleText('dim', 'none (CLAUDE_MEM_TELEMETRY_KEY is not set, so nothing is sent)')}`
+  );
   if (config?.installId) {
     console.log(`${styleText('bold', 'Install ID:')} ${config.installId} ${styleText('dim', '(random UUID, not tied to you)')}`);
   } else if (config) {
@@ -162,6 +171,12 @@ async function runTelemetryEnable(): Promise<void> {
     'What telemetry collects'
   );
 
+  if (!getTelemetryApiKey()) {
+    p.log.warn(
+      'CLAUDE_MEM_TELEMETRY_KEY is not set. This fork ships no analytics key, so nothing will be sent even after enabling here.'
+    );
+  }
+
   if (process.env.DO_NOT_TRACK && process.env.DO_NOT_TRACK !== '0' && process.env.DO_NOT_TRACK !== 'false') {
     p.log.warn(
       'DO_NOT_TRACK is set in your environment. It overrides everything: telemetry will remain OFF even after enabling here.'
@@ -170,7 +185,7 @@ async function runTelemetryEnable(): Promise<void> {
 
   const shouldEnable = await p.confirm({
     message: 'Enable anonymous usage telemetry?',
-    initialValue: true,
+    initialValue: false,
   });
 
   if (p.isCancel(shouldEnable) || !shouldEnable) {

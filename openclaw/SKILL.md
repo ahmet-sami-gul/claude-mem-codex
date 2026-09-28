@@ -7,7 +7,7 @@ This guide walks through setting up the claude-mem plugin on an OpenClaw gateway
 Run this one-liner to install everything automatically:
 
 ```bash
-curl -fsSL https://install.cmem.ai/openclaw.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ahmet-sami-gul/claude-mem-codex/main/openclaw/install.sh | bash
 ```
 
 The installer handles dependency checks (Bun, uv), plugin installation, memory slot configuration, AI provider setup, worker startup, and optional observation feed configuration — all interactively.
@@ -17,19 +17,19 @@ The installer handles dependency checks (Bun, uv), plugin installation, memory s
 Pre-select your AI provider and API key to skip interactive prompts:
 
 ```bash
-curl -fsSL https://install.cmem.ai/openclaw.sh | bash -s -- --provider=gemini --api-key=YOUR_KEY
+curl -fsSL https://raw.githubusercontent.com/ahmet-sami-gul/claude-mem-codex/main/openclaw/install.sh | bash -s -- --provider=gemini --api-key=YOUR_KEY
 ```
 
 For fully unattended installation (defaults to Claude Max Plan, skips observation feed):
 
 ```bash
-curl -fsSL https://install.cmem.ai/openclaw.sh | bash -s -- --non-interactive
+curl -fsSL https://raw.githubusercontent.com/ahmet-sami-gul/claude-mem-codex/main/openclaw/install.sh | bash -s -- --non-interactive
 ```
 
 To upgrade an existing installation (preserves settings, updates plugin):
 
 ```bash
-curl -fsSL https://install.cmem.ai/openclaw.sh | bash -s -- --upgrade
+curl -fsSL https://raw.githubusercontent.com/ahmet-sami-gul/claude-mem-codex/main/openclaw/install.sh | bash -s -- --upgrade
 ```
 
 After installation, skip to [Step 4: Restart the Gateway and Verify](#step-4-restart-the-gateway-and-verify) to confirm everything is working.
@@ -46,8 +46,8 @@ First, clone the claude-mem repository to a location accessible by your OpenClaw
 
 ```bash
 cd /opt  # or wherever you want to keep it
-git clone https://github.com/thedotmack/claude-mem.git
-cd claude-mem
+git clone https://github.com/ahmet-sami-gul/claude-mem-codex.git
+cd claude-mem-codex
 npm install
 npm run build
 ```
@@ -76,10 +76,10 @@ curl http://localhost:37777/api/health
 
 #### If Claude Code has claude-mem installed
 
-If claude-mem is installed as a Claude Code plugin (at `~/.claude/plugins/marketplaces/thedotmack/`), start the worker from that installation:
+If claude-mem is installed as a Claude Code plugin (at `~/.claude/plugins/marketplaces/claude-mem-codex/`), start the worker from that installation:
 
 ```bash
-cd ~/.claude/plugins/marketplaces/thedotmack
+cd ~/.claude/plugins/marketplaces/claude-mem-codex
 npm run worker:restart
 ```
 
@@ -97,7 +97,7 @@ curl http://localhost:37777/api/health
 Run the worker from the cloned repo:
 
 ```bash
-cd /opt/claude-mem  # wherever you cloned it
+cd /opt/claude-mem-codex  # wherever you cloned it
 npm run worker:start
 ```
 
@@ -418,8 +418,8 @@ A background service connects to the worker's SSE stream and forwards `new_obser
 | Problem | What to check |
 |---------|---------------|
 | Worker health check fails | Is bun installed? (`bun --version`). Is something else on port 37777? (`lsof -i :37777`). Try running directly: `bun plugin/scripts/worker-service.cjs start` |
-| Worker started from Claude Code install but not responding | Check `cd ~/.claude/plugins/marketplaces/thedotmack && npm run worker:status`. May need `npm run worker:restart`. |
-| Worker started from cloned repo but not responding | Check `cd /path/to/claude-mem && npm run worker:status`. Make sure you ran `npm install && npm run build` first. |
+| Worker started from Claude Code install but not responding | Check `cd ~/.claude/plugins/marketplaces/claude-mem-codex && npm run worker:status`. May need `npm run worker:restart`. |
+| Worker started from cloned repo but not responding | Check `cd /path/to/claude-mem-codex && npm run worker:status`. Make sure you ran `npm install && npm run build` first. |
 | No context in agent system prompt | Check that `syncMemoryFile` is not set to `false`. Check that the agent's ID is not in `syncMemoryFileExclude`. Verify the worker is running and has observations. |
 | Observations not being recorded | Check gateway logs for `[claude-mem]` messages. The worker must be running and reachable on localhost:37777. |
 | Feed shows `disconnected` | Worker's `/stream` endpoint not reachable. Check `workerPort` matches the actual worker port. |

@@ -63,17 +63,6 @@ describe('Version Consistency', () => {
     });
   }
 
-  it('should list both cursor marketplace plugin sources', () => {
-    const marketplaceJsonPath = path.join(projectRoot, '.cursor-plugin', 'marketplace.json');
-    expect(existsSync(marketplaceJsonPath)).toBe(true);
-
-    const marketplaceJson = JSON.parse(readFileSync(marketplaceJsonPath, 'utf-8'));
-    expect(marketplaceJson.plugins.map((plugin: any) => plugin.name)).toEqual([
-      'claude-mem-cursor',
-      'claude-mem-grok-bot',
-    ]);
-  });
-
   for (const bundle of ['worker-service.cjs', 'mcp-server.cjs', 'server-service.cjs', 'transcript-watcher.cjs']) {
     it(`should have the release version injected into built ${bundle}`, () => {
       const bundlePath = path.join(projectRoot, 'plugin/scripts', bundle);

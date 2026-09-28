@@ -33,13 +33,15 @@ export const userMessageHandler: EventHandler = {
     // the platform adapter routes it (claude-code surfaces it inline, exactly
     // like the old stderr write, but inside the HookResult contract). This
     // handler MUST stay pure — no process.stderr.write / console.* / process.exit.
+    // claude-mem-codex fork: no upstream Discord invite, and proTrialLine() is
+    // '' (no cmem.ai pitch) — this unofficial fork must not read as upstream.
+    const proLine = proTrialLine('context-banner');
     const bannerText =
       "\n\n" + String.fromCodePoint(0x1F4DD) + " Claude-Mem Context Loaded\n\n" +
       output +
       "\n\n" + String.fromCodePoint(0x1F4A1) + " Wrap any message with <private> ... </private> to prevent storing sensitive information.\n" +
-      "\n" + String.fromCodePoint(0x1F4AC) + " Community https://discord.gg/J4wttp9vDu" +
-      `\n` + String.fromCodePoint(0x1F4FA) + ` Watch live in browser http://localhost:${port}/\n` +
-      proTrialLine('context-banner') + `\n`;
+      "\n" + String.fromCodePoint(0x1F4FA) + ` Watch live in browser http://localhost:${port}/\n` +
+      (proLine ? `${proLine}\n` : '');
 
     return { exitCode: HOOK_EXIT_CODES.SUCCESS, systemMessage: bannerText };
   },

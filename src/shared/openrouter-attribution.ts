@@ -3,30 +3,24 @@
 /**
  * Shared OpenRouter app-attribution headers.
  *
- * OpenRouter builds its public app leaderboard from these headers. claude-mem
- * has one entry there (app id 2605040) and both providers — the worker-runtime
- * one (src/services/worker/OpenRouterProvider.ts) and the server-runtime one
+ * OpenRouter builds its public app leaderboard from these headers. Both
+ * providers — the worker-runtime one (src/services/worker/OpenRouterProvider.ts)
+ * and the server-runtime one
  * (src/server/generation/providers/OpenRouterObservationProvider.ts) — must
- * send identical values, or the same product splits into two apps and the
- * ranking splits with it.
+ * send identical values, or the same product splits into two apps.
  *
  * THE APP'S IDENTITY IS THE REFERER URL, NOT THE TITLE. OpenRouter's docs:
- * "Your app's URL becomes its unique identifier in the system." Changing the
- * title keeps the accumulated ranking; changing the URL mints a brand-new app
- * and strands every token the old one earned. So APP_TITLE is safe to edit and
- * APP_URL is not — do not "tidy" it to the marketing domain.
+ * "Your app's URL becomes its unique identifier in the system."
  *
- * The cmem.ai Pro gateway sends these same values on the user's behalf when a
- * subscriber's traffic is proxied, so gateway and bring-your-own-key traffic
- * land under one entry (claude-mem-pro
- * src/app/api/inference/v1/chat/completions/route.ts).
+ * claude-mem-codex fork: this unofficial fork attributes its traffic to its
+ * own repository, never to upstream claude-mem's OpenRouter app entry.
  */
 
-/** The app's unique identifier on OpenRouter. Changing this resets the ranking. */
-export const OPENROUTER_APP_URL = 'https://github.com/thedotmack/claude-mem';
+/** The app's unique identifier on OpenRouter: this fork's repository. */
+export const OPENROUTER_APP_URL = 'https://github.com/ahmet-sami-gul/claude-mem-codex';
 
 /** Display name only — safe to change, does not affect ranking. */
-export const OPENROUTER_APP_TITLE = 'Claude-Mem';
+export const OPENROUTER_APP_TITLE = 'claude-mem-codex';
 
 /**
  * Marketplace categories. Max 2 per request, 10 per app, merged server-side.

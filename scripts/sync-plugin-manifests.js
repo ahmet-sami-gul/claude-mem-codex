@@ -50,6 +50,34 @@ function syncCodexPlugin(plugin, pkg) {
   };
 }
 
+// claude-mem-codex fork: the bundled Codex manifest also takes its presentation
+// fields (author URL, display name, short and long description) from the root
+// .codex-plugin/plugin.json, so the root file is their single source and a
+// rebuild cannot leave upstream's values in plugin/.codex-plugin/plugin.json.
+function syncBundledCodexPlugin(plugin, rootPlugin, pkg) {
+  const synced = syncCodexPlugin(plugin, pkg);
+  const rootAuthor =
+    typeof rootPlugin.author === 'object' && rootPlugin.author ? rootPlugin.author : {};
+  const rootInterface =
+    typeof rootPlugin.interface === 'object' && rootPlugin.interface ? rootPlugin.interface : {};
+  const presentation = {};
+  for (const key of ['displayName', 'shortDescription', 'longDescription']) {
+    if (typeof rootInterface[key] === 'string') presentation[key] = rootInterface[key];
+  }
+
+  return {
+    ...synced,
+    author: {
+      ...synced.author,
+      ...(typeof rootAuthor.url === 'string' ? { url: rootAuthor.url } : {}),
+    },
+    interface: {
+      ...synced.interface,
+      ...presentation,
+    },
+  };
+}
+
 function syncClaudePlugin(plugin, pkg) {
   return {
     ...plugin,
@@ -111,7 +139,7 @@ function main() {
   const cursorPlugins = cursorPluginPaths.map(readJson);
 
   writeJson(codexPluginPath, syncCodexPlugin(codexPlugin, pkg));
-  writeJson(bundledCodexPluginPath, syncCodexPlugin(bundledCodexPlugin, pkg));
+  writeJson(bundledCodexPluginPath, syncBundledCodexPlugin(bundledCodexPlugin, codexPlugin, pkg));
   writeJson(claudePluginPath, syncClaudePlugin(claudePlugin, pkg));
   writeJson(bundledClaudePluginPath, syncClaudePlugin(bundledClaudePlugin, pkg));
   cursorPluginPaths.forEach((filePath, index) => writeJson(filePath, syncCursorPlugin(cursorPlugins[index], pkg)));

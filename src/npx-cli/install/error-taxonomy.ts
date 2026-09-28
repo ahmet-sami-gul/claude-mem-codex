@@ -94,7 +94,7 @@ export const ERROR_CATEGORIES: ErrorCategory[] = [
     severity: ErrorSeverity.ABORT,
     match: (cause) => /\bERESOLVE\b/.test(causeMessage(cause)),
     remediation: () =>
-      'ERESOLVE peer-dependency conflict in marketplace deps that --legacy-peer-deps could not resolve. Open an issue at https://github.com/thedotmack/claude-mem/issues with the conflicting peer ranges shown above.',
+      'ERESOLVE peer-dependency conflict in marketplace deps that --legacy-peer-deps could not resolve. Open an issue at https://github.com/ahmet-sami-gul/claude-mem-codex/issues with the conflicting peer ranges shown above.',
   },
   {
     id: 'marketplace-dir-not-writable',
@@ -110,7 +110,7 @@ export const ERROR_CATEGORIES: ErrorCategory[] = [
       ctx.component === 'plugin-json' &&
       /Unexpected token|JSON|parse/i.test(causeMessage(cause)),
     remediation: () =>
-      'Existing plugin.json is corrupt. Run `rm -rf ~/.claude/plugins/marketplaces/thedotmack` and re-run `npx claude-mem install`.',
+      'Existing plugin.json is corrupt. Run `rm -rf ~/.claude/plugins/marketplaces/claude-mem-codex` and re-run `npx claude-mem install`.',
   },
   {
     id: 'all-ides-failed',
@@ -159,7 +159,7 @@ export const ERROR_CATEGORIES: ErrorCategory[] = [
     severity: ErrorSeverity.ABORT,
     match: () => true,
     remediation: (ctx) =>
-      `An unexpected installer error occurred. Capture ${ctx.dataDir}/last-install-error.json and open an issue at https://github.com/thedotmack/claude-mem/issues.`,
+      `An unexpected installer error occurred. Capture ${ctx.dataDir}/last-install-error.json and open an issue at https://github.com/ahmet-sami-gul/claude-mem-codex/issues.`,
   },
 ];
 

@@ -20,7 +20,7 @@ Claude-mem can run its memory observer on the [Codex CLI](https://github.com/ope
 - **Worker only:** the provider runs in the local worker (the default runtime). The server runtime has no Codex provider.
 
 <Note>
-This page is about Codex as the **observer** that writes your memories. Capturing your own Codex CLI sessions into memory is a separate host integration (`npx claude-mem install` → Codex CLI, and `CLAUDE_MEM_CODEX_TRANSCRIPT_INGESTION`). The two are independent.
+This page is about Codex as the **observer** that writes your memories. Capturing your own Codex CLI sessions into memory is a separate host integration (`npx claude-mem install` → Codex CLI, and `CLAUDE_MEM_CODEX_TRANSCRIPT_INGESTION`). The two are independent. In claude-mem-codex (this unofficial fork), `npx claude-mem` runs the official upstream npm package, not this fork.
 </Note>
 
 ## Prerequisites
@@ -41,7 +41,7 @@ The provider is switched on and off **only in `~/.claude-mem/settings.json`** (o
 ```
 
 <Warning>
-**Re-running `npx claude-mem install` rewrites `CLAUDE_MEM_PROVIDER`.** The installer has no Codex choice, so it sets the provider it asks you about (Claude, CMEM Pro, OpenRouter, Gemini or host). Set it back to `"codex"` in `settings.json` afterwards.
+**Running `npx claude-mem install` rewrites `CLAUDE_MEM_PROVIDER`.** The installer has no Codex choice, so it sets the provider it asks you about (Claude, CMEM Pro, OpenRouter, Gemini or host). Set it back to `"codex"` in `settings.json` afterwards. In claude-mem-codex it also installs the official upstream claude-mem from npm next to this fork, so do not run it on a claude-mem-codex install.
 </Warning>
 
 **Why not from the viewer?** The settings API (`POST /api/settings`) has no login: any program on this machine, or any page served from localhost, can call it. If that API could select Codex, such a page or script could move your memory onto your paid ChatGPT plan. So the API refuses to switch *to* `codex`, and it also refuses to switch *away* from a `codex` already in `settings.json`: either direction is a file edit. To go back to another provider, change `CLAUDE_MEM_PROVIDER` in the file.

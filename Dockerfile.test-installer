@@ -43,7 +43,7 @@ cat <<'BANNER'
 
   After install, verify the Setup hook is fast:
 
-      time node ~/.claude/plugins/cache/thedotmack/claude-mem/$(jq -r .version package.json)/scripts/version-check.js
+      time node ~/.claude/plugins/cache/claude-mem-codex/claude-mem/$(jq -r .version package.json)/scripts/version-check.js
 
   Container HOME=/root is isolated — nothing here touches your real
   ~/.claude or ~/.claude-mem. Exit with Ctrl-D.

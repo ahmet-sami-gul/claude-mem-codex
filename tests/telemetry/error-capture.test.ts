@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -41,7 +41,9 @@ beforeAll(() => {
   process.env.CLAUDE_MEM_TELEMETRY = '1';
   delete process.env.CLAUDE_MEM_TELEMETRY_ERRORS;
   delete process.env.CLAUDE_MEM_TELEMETRY_DEBUG;
-  delete process.env.CLAUDE_MEM_TELEMETRY_KEY;
+  // claude-mem-codex fork: no project key ships, so a transport only exists
+  // with CLAUDE_MEM_TELEMETRY_KEY set (the PostHog SDK is mocked in preload).
+  process.env.CLAUDE_MEM_TELEMETRY_KEY = 'test-telemetry-key';
   delete process.env.DO_NOT_TRACK;
 });
 
@@ -177,6 +179,45 @@ describe('before_send autocapture rate-limit', () => {
     } as { event: string; properties: Record<string, unknown> };
     const out = __errorBeforeSendForTests(ev) as typeof ev;
     expect(out.properties.occurrence_count).toBe(1);
+  });
+});
+
+describe('before_send re-checks consent for SDK-autocaptured $exception', () => {
+  // posthog-node installs its uncaughtException / unhandledRejection listeners
+  // when the client is built and never re-checks consent, so before_send is
+  // the only place a later opt-out can stop an autocaptured exception.
+  const mkAutocaptured = (message: string) => ({
+    event: '$exception',
+    properties: { $exception_type: 'Error', $exception_message: message },
+  });
+
+  it('drops an autocaptured exception once consent is revoked (env)', () => {
+    process.env.CLAUDE_MEM_TELEMETRY = '0';
+    expect(__errorBeforeSendForTests(mkAutocaptured('revoked by env'))).toBeNull();
+  });
+
+  it('drops an autocaptured exception once telemetry.json says enabled:false', () => {
+    delete process.env.CLAUDE_MEM_TELEMETRY;
+    writeFileSync(join(tempDir, 'telemetry.json'), JSON.stringify({ enabled: true, installId: 'test-install' }));
+    expect(__errorBeforeSendForTests(mkAutocaptured('opted in via file'))).not.toBeNull();
+
+    writeFileSync(join(tempDir, 'telemetry.json'), JSON.stringify({ enabled: false, installId: 'test-install' }));
+    // A running worker picks the change up once the 30s consent cache expires;
+    // the reset stands in for that expiry.
+    __resetTelemetryForTests();
+    expect(__errorBeforeSendForTests(mkAutocaptured('revoked via file'))).toBeNull();
+    rmSync(join(tempDir, 'telemetry.json'), { force: true });
+  });
+
+  it('drops an autocaptured exception when the error kill-switch is on', () => {
+    process.env.CLAUDE_MEM_TELEMETRY_ERRORS = '0';
+    expect(__errorBeforeSendForTests(mkAutocaptured('errors switched off'))).toBeNull();
+  });
+
+  it('still passes a manual (sentinel-marked) exception, which captureException already gated', () => {
+    process.env.CLAUDE_MEM_TELEMETRY = '0';
+    const ev = { event: '$exception', properties: { __cm_rate_limited: true, occurrence_count: 1 } };
+    expect(__errorBeforeSendForTests(ev)).toBe(ev);
   });
 });
 

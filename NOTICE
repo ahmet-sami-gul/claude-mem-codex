@@ -6,3 +6,18 @@ This product includes software developed for the Claude-Mem project.
 Licensed under the Apache License, Version 2.0.
 
 If other attributions are required by dependencies or included code, add them here.
+
+----------------------------------------------------------------------
+
+claude-mem-codex
+Unofficial fork of Claude-Mem, maintained by Ahmet Sami Gül
+(https://github.com/ahmet-sami-gul/claude-mem-codex).
+
+This fork is not affiliated with or endorsed by the Claude-Mem project,
+Anthropic or OpenAI. It is based on Claude-Mem 13.25.2 (upstream commit
+4e98d97) and modifies files of the original work: it adds a Codex CLI
+observer provider and makes the other changes listed in CHANGES-FORK.md,
+which records the modifications made relative to the upstream version.
+
+Modifications Copyright 2026 Ahmet Sami Gül, licensed under the Apache
+License, Version 2.0.

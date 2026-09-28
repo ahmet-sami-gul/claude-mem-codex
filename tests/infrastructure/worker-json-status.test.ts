@@ -200,7 +200,7 @@ describe('worker-json-status', () => {
         },
       });
 
-      expect(hint).toBe('  Dependencies: degraded (Claude CLI setup required, uvx unavailable for vector search, Chroma unavailable for vector search). Run npx claude-mem doctor or open Settings for remediation.');
+      expect(hint).toBe('  Dependencies: degraded (Claude CLI setup required, uvx unavailable for vector search, Chroma unavailable for vector search). The remediation for each is listed under "dependencies" in the worker\'s /api/health response.');
     });
 
     it('names the two codex_cli states instead of printing the raw keys', () => {

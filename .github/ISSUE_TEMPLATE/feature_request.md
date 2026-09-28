@@ -9,7 +9,9 @@ assignees: ''
 
 ## Before submitting
 
-- [ ] I searched [existing issues](https://github.com/thedotmack/claude-mem/issues) and confirmed this is not a duplicate
+This tracker is for **claude-mem-codex**, an unofficial fork of claude-mem. Ideas for claude-mem itself, unrelated to this fork's changes (the Codex provider and the other items in `CHANGES-FORK.md`), belong to the upstream project instead.
+
+- [ ] I searched [existing issues](https://github.com/ahmet-sami-gul/claude-mem-codex/issues) and confirmed this is not a duplicate
 
 ---
 

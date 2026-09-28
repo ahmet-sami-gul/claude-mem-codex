@@ -1,19 +1,28 @@
 ---
 title: "Telemetry"
-description: "Anonymous usage analytics — on by default, fully documented, one command to opt out"
+description: "Anonymous usage analytics — off by default in claude-mem-codex, opt-in, and only to a PostHog project you configure"
 ---
 
 # Telemetry
 
 Claude-mem includes anonymous usage analytics (via PostHog) to help prioritize fixes and features.
 
-**It is on by default (opt-out).** Events are anonymous, identified only by a random install UUID, and every analytics property passes a strict whitelist — see [What is collected](#what-is-collected) and [What is NEVER collected](#what-is-never-collected) below. Turning it off is one command:
+<Note>
+**claude-mem-codex (this unofficial fork): telemetry is off and sends nothing by default.** Upstream claude-mem turns telemetry on by default and ships its own PostHog project key. This fork changes both:
+
+- **No project key ships.** Nothing can reach upstream's analytics. A transport exists only when you set `CLAUDE_MEM_TELEMETRY_KEY` (and, optionally, `CLAUDE_MEM_TELEMETRY_HOST`, default `https://us.i.posthog.com`) to a PostHog project of your own.
+- **Consent defaults to off (opt-in).** Even with a key set, nothing is sent until you opt in: `CLAUDE_MEM_TELEMETRY=1`, or `enabled: true` in `telemetry.json` (see [Where the config lives](#where-the-config-lives)).
+
+Both are required, for analytics events, error tracking (including exception autocapture) and the historical backfill alike. In the default configuration no request is made to PostHog; `tests/telemetry/no-network-default.test.ts` checks this with the real PostHog SDK. The rest of this page describes what upstream collects when telemetry is enabled; the same whitelist applies when you opt in with your own key.
+</Note>
+
+**Upstream claude-mem turns it on by default (opt-out); this fork does not.** Events are anonymous, identified only by a random install UUID, and every analytics property passes a strict whitelist — see [What is collected](#what-is-collected) and [What is NEVER collected](#what-is-never-collected) below. If you opted in and want it off again, set `"enabled": false` in [`telemetry.json`](#where-the-config-lives), or set the universal opt-out in the worker's environment:
 
 ```bash
-npx claude-mem telemetry disable
+DO_NOT_TRACK=1
 ```
 
-The standard [`DO_NOT_TRACK`](https://consoledonottrack.com) environment variable is also honored and overrides everything. The installer asks once at the end of `npx claude-mem install` so the default is never silent for new installs — your answer (either way) is remembered and never re-asked, and the prompt is skipped entirely when `DO_NOT_TRACK` is set or in CI/non-interactive installs.
+The standard [`DO_NOT_TRACK`](https://consoledonottrack.com) environment variable is also honored and overrides everything. Upstream's installer asks once at the end of `npx claude-mem install` so the default is never silent for new installs — your answer (either way) is remembered and never re-asked, and the prompt is skipped entirely when `DO_NOT_TRACK` is set or in CI/non-interactive installs. (`npx claude-mem` runs the official upstream npm package, not this fork. In this fork's installer code the question is only asked when `CLAUDE_MEM_TELEMETRY_KEY` is set, and it defaults to "no".)
 
 ## How instrumentation works
 
@@ -194,7 +203,7 @@ Like everything else, these are counts and closed-set values only — **never ti
 A few things worth knowing:
 
 - **It runs once.** A completion marker (`backfill.json` in the claude-mem data directory) is written after a successful send and prevents the backfill from ever running again. Until a run succeeds, no marker is written, so a failed attempt simply retries on the next worker start.
-- **It honors the exact same consent gates as live telemetry** — `DO_NOT_TRACK`, `CLAUDE_MEM_TELEMETRY=0`, and `enabled: false` in `telemetry.json` all block it, and [debug mode](#debug-mode) prints the would-be payload without sending.
+- **It honors the exact same consent gates as live telemetry** — `DO_NOT_TRACK`, `CLAUDE_MEM_TELEMETRY=0`, and `enabled: false` in `telemetry.json` all block it, and [debug mode](#debug-mode) prints the would-be payload without sending. In claude-mem-codex it also needs an explicit opt-in and `CLAUDE_MEM_TELEMETRY_KEY`; without a key nothing is sent and no marker is written.
 - **Opting out before the first worker start after upgrading prevents it entirely.** Nothing is sent and no marker is written while you are opted out — though if you opt back in later, the backfill will then run.
 - **Location is upload-time, not historical.** The coarse location PostHog derives at ingestion (see above) reflects where the events were uploaded from, not where you were on the historical dates they describe.
 
@@ -220,15 +229,12 @@ Analytics properties are enforced in code: they go through a whitelist (only the
 
 ## How to opt out (four ways)
 
-Any one of these keeps telemetry off — they are checked in this order, first match wins:
+In claude-mem-codex telemetry is already off unless you opted in (and it sends nothing without `CLAUDE_MEM_TELEMETRY_KEY`). Any one of these keeps it off — they are checked in this order, first match wins, and with no match the fork's default (off) applies:
 
 1. **`DO_NOT_TRACK`** — the [universal opt-out](https://consoledonottrack.com). Set `DO_NOT_TRACK=1` and telemetry is forced off, overriding everything else.
 2. **`CLAUDE_MEM_TELEMETRY=0`** (also `false` / `off`) — environment override. (`CLAUDE_MEM_TELEMETRY=1` conversely forces it on.)
 3. **Telemetry config file** — `enabled: false` in `telemetry.json` (see below).
-4. **CLI command**:
-   ```bash
-   npx claude-mem telemetry disable
-   ```
+4. **CLI command**: upstream's `npx claude-mem telemetry disable` writes the same `enabled: false`. `npx claude-mem` runs the official upstream npm package, which this fork does not publish, so in claude-mem-codex edit `telemetry.json` directly (option 3).
 
 ### Error tracking opt-out (independent)
 
@@ -240,11 +246,7 @@ CLAUDE_MEM_TELEMETRY_ERRORS=0   # also accepts 'false' / 'off'
 
 This is the one telemetry path that carries free-form (redacted) text and is a [one-way door](#error-tracking) once ingested, so it has its own kill-switch for operators who are fine with anonymous counters but not error text. It defaults on whenever telemetry consent is on; any of the four opt-outs above also disables it implicitly (no consent ⇒ no errors).
 
-Check the current state — and which of the four layers decided it — anytime:
-
-```bash
-npx claude-mem telemetry status
-```
+Upstream checks the current state — and which of the four layers decided it — with `npx claude-mem telemetry status` (upstream npm package). In claude-mem-codex, look at the environment variables above and at `enabled` in `telemetry.json`; with neither set, telemetry is off.
 
 ## Debug mode
 
@@ -271,4 +273,4 @@ Consent and the anonymous install ID are stored in `telemetry.json` inside the c
 }
 ```
 
-The `enabled` field is only present once you've made an explicit choice (installer prompt, `telemetry enable`, or `telemetry disable`). A file with just an `installId` means no decision was recorded and the default (on) applies. Delete the file to reset completely — a fresh install ID is generated on next use.
+The `enabled` field is only present once you've made an explicit choice (installer prompt, `telemetry enable`, or `telemetry disable`). A file with just an `installId` means no decision was recorded and the default applies: off in claude-mem-codex (upstream: on). Delete the file to reset completely — a fresh install ID is generated on next use.

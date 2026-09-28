@@ -6,6 +6,10 @@
  * binary this posts one event directly to the public ingestion endpoint with a
  * hard 2s timeout. Same consent gate, same whitelist scrubber, same anonymous
  * install ID as the worker transport (telemetry.ts).
+ *
+ * claude-mem-codex fork: consent defaults off and no project key ships, so
+ * nothing is posted unless the operator opted in AND set
+ * CLAUDE_MEM_TELEMETRY_KEY. The fork does not publish this npx CLI.
  */
 
 import { resolveTelemetryConsent, loadTelemetryConfig, getOrCreateInstallId } from './consent.js';
@@ -47,6 +51,7 @@ export async function captureCliEvent(
     }
 
     const apiKey = getTelemetryApiKey();
+    if (!apiKey) return; // no project key configured: nothing is sent
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), CAPTURE_TIMEOUT_MS);
     try {

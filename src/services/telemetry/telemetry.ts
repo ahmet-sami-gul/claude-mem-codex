@@ -60,8 +60,16 @@ export function enableExceptionAutocaptureForWorker(): void {
   autocaptureEnabled = true;
 }
 
-function getClient(): PostHog {
+/**
+ * The worker's PostHog client, or null when no project key is configured.
+ * claude-mem-codex fork: no key ships in the build (common.ts), so without
+ * CLAUDE_MEM_TELEMETRY_KEY no client is ever constructed — nothing is queued,
+ * no exception autocapture hooks are installed, and no request is made.
+ */
+function getClient(): PostHog | null {
   if (!client) {
+    const apiKey = getTelemetryApiKey();
+    if (!apiKey) return null;
     // Autocapture is gated by BOTH consent (caller already passed hasConsent())
     // AND the error kill-switch. Even when enabled, every autocaptured
     // $exception is funneled through before_send → applyErrorRateLimit, so the
@@ -72,7 +80,7 @@ function getClient(): PostHog {
       isErrorTelemetryEnabled(process.env) &&
       hasConsent();
 
-    client = new PostHog(getTelemetryApiKey(), {
+    client = new PostHog(apiKey, {
       host: getTelemetryHost(),
       flushAt: 20,
       flushInterval: 10000,
@@ -317,8 +325,15 @@ function errorBeforeSend(event: EventMessage | null): EventMessage | null {
       return event;
     }
 
-    // AUTOCAPTURE path (no sentinel): redact the raw source/message the SDK
-    // attached BEFORE anything else, so even an early return can't leak.
+    // AUTOCAPTURE path (no sentinel). The SDK decided to autocapture once, when
+    // the client was built, and its process listeners never re-check consent:
+    // re-apply the same live gate as captureException() so a later opt-out
+    // (telemetry.json enabled:false, CLAUDE_MEM_TELEMETRY_ERRORS=0) stops
+    // autocaptured exceptions too, not just manual ones.
+    if (isShutdown || !hasConsent() || !isErrorTelemetryEnabled(process.env)) return null;
+
+    // Redact the raw source/message the SDK attached BEFORE anything else, so
+    // even an early return can't leak.
     redactAutocapturedExceptionList(props);
     props.$process_person_profile = false;
     ev.properties = props;
@@ -464,19 +479,22 @@ function captureExceptionInner(
   safeError.name = scrubbed.type;
   safeError.stack = scrubbed.stack || `${scrubbed.type}: ${scrubbed.message}`;
 
-  getClient().captureException(safeError, getOrCreateInstallId(), additionalProperties);
+  const posthog = getClient();
+  if (!posthog) return; // no project key configured: nothing is sent
+  posthog.captureException(safeError, getOrCreateInstallId(), additionalProperties);
 }
 
 /**
  * Capture a telemetry event. Fire-and-forget, synchronous, never throws,
  * never blocks. Ordering is deliberate:
  *
- *   1. Consent gate (DO_NOT_TRACK > env > telemetry.json > default ON) —
- *      without consent NOTHING happens, including debug printing.
+ *   1. Consent gate (DO_NOT_TRACK > env > telemetry.json > default OFF in
+ *      this fork) — without consent NOTHING happens, including debug printing.
  *   2. Whitelist scrub — only allowed primitive properties survive.
  *   3. Debug mode (CLAUDE_MEM_TELEMETRY_DEBUG=1) — print payload to stderr,
  *      send nothing.
- *   4. posthog.capture() — SDK queues in memory and batches in background.
+ *   4. posthog.capture() — only when CLAUDE_MEM_TELEMETRY_KEY is set (no key
+ *      ships in this fork); the SDK queues in memory and batches in background.
  *
  * Two event classes (opts.person):
  *   - Lifecycle events (worker_started, install_*) pass person: true. They are
@@ -536,7 +554,9 @@ function captureEventInner(
     return;
   }
 
-  getClient().capture({
+  const posthog = getClient();
+  if (!posthog) return; // no project key configured: nothing is sent
+  posthog.capture({
     distinctId: getOrCreateInstallId(),
     event,
     properties,

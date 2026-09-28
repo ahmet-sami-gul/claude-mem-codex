@@ -127,6 +127,24 @@ describe('SearchRoutes Welcome Hint', () => {
     expect(generateContextStub).not.toHaveBeenCalled();
   });
 
+  // claude-mem-codex fork: no upstream cmem.ai Pro pitch, and no blank line
+  // left where it used to be.
+  it('carries no cmem.ai Pro trial pitch', async () => {
+    const routes = new SearchRoutes(mockSearchManager);
+    const handler = captureContextInjectHandler(routes);
+
+    const res = createMockRes();
+    const req = { query: { projects: '/path/to/empty-project' } } as unknown as Request;
+
+    handler(req, res as unknown as Response);
+    await new Promise(resolve => setImmediate(resolve));
+
+    const body = (res.send as any).mock.calls[0][0] as string;
+    expect(body).not.toContain('cmem.ai');
+    expect(body).not.toContain('{pro_trial_line}');
+    expect(body).toMatch(/Live activity: http:\/\/localhost:\d+\nHow it works: `\/how-it-works`/);
+  });
+
   it('appends the observer-health warning to the welcome hint when the observer is failing', async () => {
     // A user whose observer has failed since install has zero observations, so
     // the welcome-hint early return is the ONLY context they ever see. The

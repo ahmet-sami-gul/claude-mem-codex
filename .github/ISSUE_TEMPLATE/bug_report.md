@@ -9,7 +9,9 @@ assignees: ''
 
 ## Before submitting
 
-- [ ] I searched [existing issues](https://github.com/thedotmack/claude-mem/issues) and confirmed this is not a duplicate
+This tracker is for **claude-mem-codex**, an unofficial fork of claude-mem. Report problems that also happen with the official claude-mem (without this fork) to the upstream project instead.
+
+- [ ] I searched [existing issues](https://github.com/ahmet-sami-gul/claude-mem-codex/issues) and confirmed this is not a duplicate
 
 ---
 
@@ -19,15 +21,15 @@ assignees: ''
 
 ```bash
 # Navigate to the plugin directory
-cd ~/.claude/plugins/marketplaces/thedotmack
+cd ~/.claude/plugins/marketplaces/claude-mem-codex
 
 # Run the bug report tool
 npm run bug-report
 ```
 
 **Plugin Paths:**
-- **macOS/Linux**: `~/.claude/plugins/marketplaces/thedotmack`
-- **Windows**: `%USERPROFILE%\.claude\plugins\marketplaces\thedotmack`
+- **macOS/Linux**: `~/.claude/plugins/marketplaces/claude-mem-codex`
+- **Windows**: `%USERPROFILE%\.claude\plugins\marketplaces\claude-mem-codex`
 
 **Features:**
 - 🌎 Auto-translates any language to English

@@ -1,5 +1,7 @@
 # Claude-Mem: AI Development Instructions
 
+This repository is **claude-mem-codex**, an unofficial fork of claude-mem that adds a Codex CLI observer provider. Marketplace: `claude-mem-codex`; plugin id: `claude-mem@claude-mem-codex`. Fork changes are listed in `CHANGES-FORK.md`.
+
 Claude-mem is a Claude Code plugin providing persistent memory across sessions. It captures tool usage, compresses observations using the Claude Agent SDK, and injects relevant context into future sessions.
 
 ## Build
@@ -12,7 +14,7 @@ npm run build-and-sync        # Build, sync to marketplace, restart worker
 
 - **Source**: `<project-root>/src/`
 - **Built Plugin**: `<project-root>/plugin/`
-- **Installed Plugin**: `~/.claude/plugins/marketplaces/thedotmack/`
+- **Installed Plugin**: `~/.claude/plugins/marketplaces/claude-mem-codex/`
 - **Database**: `~/.claude-mem/claude-mem.db`
 - **Chroma**: `~/.claude-mem/chroma/`
 
@@ -24,9 +26,8 @@ npm run build-and-sync        # Build, sync to marketplace, restart worker
 
 ## Documentation
 
-**Public Docs**: https://docs.claude-mem.ai (Mintlify)
+**Public Docs**: https://docs.claude-mem.ai (Mintlify) documents upstream claude-mem; this fork (claude-mem-codex) does not deploy `docs/public/`
 **Source**: `docs/public/` - MDX files, edit `docs.json` for navigation
-**Deploy**: Auto-deploys from GitHub on push to main
 
 ## Important
 

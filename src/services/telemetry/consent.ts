@@ -6,7 +6,7 @@ import { readJsonSafe } from '../../utils/json-utils.js';
 import { logger } from '../../utils/logger.js';
 
 export type TelemetryConfig = {
-  /** Explicit user decision. Absent = no decision recorded; the opt-out default applies. */
+  /** Explicit user decision. Absent = no decision recorded; the default (off) applies. */
   enabled?: boolean;
   installId: string;
   decidedAt: string;
@@ -40,7 +40,9 @@ export type TelemetryConsentExplanation = {
  * 1. DO_NOT_TRACK set (truthy) -> always off
  * 2. CLAUDE_MEM_TELEMETRY env: '0'/'false'/'off' -> off, '1'/'true'/'on' -> on
  * 3. telemetry.json config: enabled === true -> on, enabled === false -> off
- * 4. Default: on (opt-out — anonymous events only; see docs.claude-mem.ai/telemetry)
+ * 4. Default: OFF. claude-mem-codex fork: telemetry is opt-in (upstream
+ *    defaults on). Consent alone still sends nothing: a transport also needs
+ *    CLAUDE_MEM_TELEMETRY_KEY (common.ts ships no project key).
  */
 export function explainTelemetryConsent(
   env: NodeJS.ProcessEnv,
@@ -59,7 +61,7 @@ export function explainTelemetryConsent(
   if (config?.enabled === true) return { enabled: true, source: 'config' };
   if (config?.enabled === false) return { enabled: false, source: 'config' };
 
-  return { enabled: true, source: 'default' };
+  return { enabled: false, source: 'default' };
 }
 
 /**
@@ -128,8 +130,8 @@ export function saveTelemetryConfig(config: TelemetryConfig): void {
 
 /**
  * Returns the stable anonymous install ID, generating and persisting one on
- * first use. Records ONLY the ID — never a consent decision — so the opt-out
- * default (and any future default change) still applies to this install.
+ * first use. Records ONLY the ID — never a consent decision — so the default
+ * (off in this fork) still applies to this install.
  */
 export function getOrCreateInstallId(): string {
   const existing = loadTelemetryConfig();

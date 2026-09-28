@@ -379,10 +379,22 @@ describe('renderObserverHealthWarning', () => {
 
   it('offers both a click-to-restart link and the terminal command, then doctor', () => {
     const warning = renderObserverHealthWarning(unhealthyState());
+    const base = workerRestartUrl().replace(/\/restart$/, '');
     expect(warning).toContain(workerRestartUrl());
-    expect(warning).toContain('npx claude-mem restart');
-    expect(warning).toContain('npx claude-mem doctor');
-    expect(warning.indexOf(workerRestartUrl())).toBeLessThan(warning.indexOf('npx claude-mem doctor'));
+    expect(warning).toContain(`curl -X POST ${base}/api/admin/restart`);
+    expect(warning).toContain(`${base}/api/admin/doctor`);
+    expect(warning).toContain('~/.claude-mem/logs');
+    expect(warning.indexOf(workerRestartUrl())).toBeLessThan(warning.indexOf('/api/admin/doctor'));
+  });
+
+  // claude-mem-codex fork: `npx claude-mem` runs the official upstream npm
+  // package, which cannot see this fork's install and offers to install
+  // upstream next to it.
+  it('never sends the user to the upstream npx CLI', () => {
+    expect(renderObserverHealthWarning(unhealthyState())).not.toContain('npx claude-mem');
+    expect(renderObserverHealthWarning(unhealthyState({
+      lastErrorAction: 'Add credits to keep going now.',
+    }))).not.toContain('npx claude-mem');
   });
 
   it('points the restart link at the worker port, not a hardcoded one', () => {
@@ -393,7 +405,7 @@ describe('renderObserverHealthWarning', () => {
     const instruction = renderObserverHealthWarning(unhealthyState());
     const assistantBlock = instruction.slice(instruction.indexOf('(Assistant:'));
     expect(assistantBlock).toContain('let them press it');
-    expect(assistantBlock).not.toContain('npx claude-mem restart');
+    expect(assistantBlock).not.toContain('/api/admin/restart');
   });
 
   it('keeps the remedy steps even when the error is classified', () => {
@@ -401,7 +413,7 @@ describe('renderObserverHealthWarning', () => {
       lastErrorAction: 'Add credits to keep going now.',
     }));
     expect(warning).toContain(workerRestartUrl());
-    expect(warning).toContain('npx claude-mem doctor');
+    expect(warning).toContain('/api/admin/doctor');
     expect(warning).toContain('What to do: Add credits to keep going now.');
     expect(warning).not.toContain('~/.claude-mem/settings.json');
   });
@@ -515,7 +527,7 @@ describe('failures the worker will not retry on its own (M3, plan 3.6 (b))', () 
     expect(warning).toContain('discards the held observations');
     expect(warning).toContain('Do NOT restart the worker');
     expect(warning).not.toContain(workerRestartUrl());
-    expect(warning).not.toContain('npx claude-mem restart');
+    expect(warning).not.toContain('/api/admin/restart');
     // It is one problem, not a failure count.
     expect(warning).not.toContain('in a row');
   });
@@ -664,7 +676,7 @@ describe('a transport pause the worker is retrying (M3)', () => {
     expect(warning).toContain('discards the');
     expect(warning).toContain('Do NOT restart the worker');
     expect(warning).not.toContain(workerRestartUrl());
-    expect(warning).not.toContain('npx claude-mem restart');
+    expect(warning).not.toContain('/api/admin/restart');
     expect(warning).not.toContain('nothing from this session');
   });
 

@@ -341,7 +341,7 @@ export function compareVersionsDescending(a: string, b: string): number {
 }
 
 export function cacheWorkerScriptCandidates(
-  cacheRoot: string = path.join(path.dirname(path.dirname(MARKETPLACE_ROOT)), 'cache', 'thedotmack', 'claude-mem')
+  cacheRoot: string = path.join(path.dirname(path.dirname(MARKETPLACE_ROOT)), 'cache', 'claude-mem-codex', 'claude-mem')
 ): WorkerScriptCandidate[] {
   try {
     return readdirSync(cacheRoot)

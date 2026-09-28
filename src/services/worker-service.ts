@@ -1713,7 +1713,9 @@ export function formatDependencyHealthHint(health: WorkerHealthSnapshot): string
     return `${status.dependency}: ${status.kind}`;
   });
 
-  return `  Dependencies: degraded (${labels.join(', ')}). Run npx claude-mem doctor or open Settings for remediation.`;
+  // claude-mem-codex fork: no `npx claude-mem doctor` (the upstream npm package
+  // cannot see this install); the remediation text ships in /api/health itself.
+  return `  Dependencies: degraded (${labels.join(', ')}). The remediation for each is listed under "dependencies" in the worker's /api/health response.`;
 }
 
 /**

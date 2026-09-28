@@ -33,7 +33,9 @@ beforeAll(() => {
   process.env.CLAUDE_MEM_DATA_DIR = tempDir;
   process.env.CLAUDE_MEM_TELEMETRY = '1';
   delete process.env.CLAUDE_MEM_TELEMETRY_DEBUG;
-  delete process.env.CLAUDE_MEM_TELEMETRY_KEY;
+  // claude-mem-codex fork: no project key ships, so a transport only exists
+  // with CLAUDE_MEM_TELEMETRY_KEY set (the PostHog SDK is mocked in preload).
+  process.env.CLAUDE_MEM_TELEMETRY_KEY = 'test-telemetry-key';
   delete process.env.DO_NOT_TRACK;
 
   __resetTelemetryForTests();

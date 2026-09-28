@@ -18,16 +18,14 @@ const RECOGNIZED_CATEGORIES = new Set([
 ]);
 
 describe('OpenRouter app identity', () => {
-  // This is the one value that must never drift. OpenRouter keys the public
-  // leaderboard on the referer URL, so changing it mints a brand-new app and
-  // strands every token the existing entry (app id 2605040) has earned.
-  // Deliberately no rank here — the daily rank moves and would rot.
-  it('pins the app URL that owns the ranking', () => {
-    expect(OPENROUTER_APP_URL).toBe('https://github.com/thedotmack/claude-mem');
+  // OpenRouter keys the public leaderboard on the referer URL. The fork
+  // attributes its traffic to its own repository, never to upstream's entry.
+  it('pins the app URL to the fork repository', () => {
+    expect(OPENROUTER_APP_URL).toBe('https://github.com/ahmet-sami-gul/claude-mem-codex');
   });
 
   it('sends the title as the display name', () => {
-    expect(OPENROUTER_APP_TITLE).toBe('Claude-Mem');
+    expect(OPENROUTER_APP_TITLE).toBe('claude-mem-codex');
   });
 });
 

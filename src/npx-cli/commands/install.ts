@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { spawnSync } from 'child_process';
 import { loadTelemetryConfig, saveTelemetryConfig } from '../../services/telemetry/consent.js';
 import { captureCliEvent } from '../../services/telemetry/cli-telemetry.js';
+import { getTelemetryApiKey } from '../../services/telemetry/common.js';
 import { buildSpawnSyncInvocation, lookupWindowsCommand, spawnHidden } from '../../shared/spawn.js';
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { homedir, hostname } from 'os';
@@ -186,10 +187,10 @@ import { checkWindowsGitBash } from '../utils/windows-git-bash-preflight.js';
 function registerMarketplace(): void {
   const knownMarketplaces = readJsonSafe<Record<string, any>>(knownMarketplacesPath(), {});
 
-  knownMarketplaces['thedotmack'] = {
+  knownMarketplaces['claude-mem-codex'] = {
     source: {
       source: 'github',
-      repo: 'thedotmack/claude-mem',
+      repo: 'ahmet-sami-gul/claude-mem-codex',
     },
     installLocation: marketplaceDirectory(),
     lastUpdated: new Date().toISOString(),
@@ -209,7 +210,7 @@ function registerPlugin(version: string): void {
   const cachePath = pluginCacheDirectory(version);
   const now = new Date().toISOString();
 
-  installedPlugins.plugins['claude-mem@thedotmack'] = [
+  installedPlugins.plugins['claude-mem@claude-mem-codex'] = [
     {
       scope: 'user',
       installPath: cachePath,
@@ -226,7 +227,7 @@ function enablePluginInClaudeSettings(): void {
   const settings = readJsonSafe<Record<string, any>>(claudeSettingsPath(), {});
 
   if (!settings.enabledPlugins) settings.enabledPlugins = {};
-  settings.enabledPlugins['claude-mem@thedotmack'] = true;
+  settings.enabledPlugins['claude-mem@claude-mem-codex'] = true;
 
   writeJsonFileAtomic(claudeSettingsPath(), settings);
 }
@@ -1808,16 +1809,20 @@ export async function completeCmemTrialPairing(
 }
 
 /**
- * Final step of the install flow: tell the user telemetry is on by default
- * (opt-out) and let them decide. Asked ONCE — a telemetry.json with a recorded
- * enabled decision means the user already chose, and we never re-nag. An
- * installId-only config (written by the worker's ID bootstrap) does NOT count
- * as a decision. Respects DO_NOT_TRACK (skip entirely: they already answered),
- * CI, and non-TTY. See docs/public/telemetry.mdx for what is/isn't collected.
+ * Final step of the install flow: offer the telemetry opt-in. claude-mem-codex
+ * fork: telemetry is OFF by default and no project key ships, so the question
+ * is only asked when the operator configured CLAUDE_MEM_TELEMETRY_KEY (their
+ * own PostHog project); otherwise there is nowhere to send anything and it is
+ * skipped. Asked ONCE — a telemetry.json with a recorded enabled decision
+ * means the user already chose, and we never re-nag. An installId-only config
+ * (written by the worker's ID bootstrap) does NOT count as a decision.
+ * Respects DO_NOT_TRACK (skip entirely: they already answered), CI, and
+ * non-TTY. See docs/public/telemetry.mdx for what is/isn't collected.
  */
 async function promptTelemetryOptIn(): Promise<void> {
   if (!isInteractive) return;
   if (process.env.CI) return;
+  if (!getTelemetryApiKey()) return;
   const dnt = process.env.DO_NOT_TRACK;
   if (dnt !== undefined && dnt !== '' && dnt !== '0' && dnt !== 'false') return;
   const existing = loadTelemetryConfig();
@@ -1825,11 +1830,11 @@ async function promptTelemetryOptIn(): Promise<void> {
 
   p.log.message(styleText('dim', 
     'Anonymous install ID only — no prompts, file paths, code, or project names, ever.\n'
-    + 'Details: https://docs.claude-mem.ai/telemetry · Change anytime: claude-mem telemetry disable',
+    + 'Details: https://github.com/ahmet-sami-gul/claude-mem-codex/blob/HEAD/docs/public/telemetry.mdx · Change anytime: claude-mem telemetry disable',
   ));
   const consent = await p.confirm({
-    message: 'Share anonymized usage data with CMEM? It is on by default and helps us make the product better.',
-    initialValue: true,
+    message: 'Send anonymized usage data to the PostHog project set in CLAUDE_MEM_TELEMETRY_KEY? It is off unless you opt in.',
+    initialValue: false,
   });
   if (p.isCancel(consent)) return;
 

@@ -94,7 +94,7 @@ function isPluginDisabledInClaudeSettings() {
     return Boolean(
       settings &&
       settings.enabledPlugins &&
-      settings.enabledPlugins['claude-mem@thedotmack'] === false
+      settings.enabledPlugins['claude-mem@claude-mem-codex'] === false
     );
   } catch {
     return false;

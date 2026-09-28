@@ -64,8 +64,22 @@ describe('plugin/scripts/version-check.js install marker compatibility', () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain(
-      'claude-mem: upgraded to v12.4.4 - run: npx claude-mem@latest install',
+      'claude-mem: upgraded to v12.4.4 - update with: claude plugin marketplace update claude-mem-codex && claude plugin install claude-mem@claude-mem-codex',
     );
+  });
+
+  // claude-mem-codex fork: only upstream's npx installer writes the marker, so
+  // a plugin-marketplace install never has one and must not be told to run it.
+  it('stays silent when no marker exists (the normal state of a marketplace install)', () => {
+    const result = runVersionCheck(tempDir);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+  });
+
+  it('never sends the user to the upstream npx installer', () => {
+    expect(versionCheckSource).not.toContain('npx claude-mem');
   });
 });
 

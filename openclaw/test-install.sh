@@ -484,7 +484,7 @@ for fn in find_openclaw check_openclaw install_plugin configure_memory_slot; do
   fi
 done
 
-assert_contains "$CLAUDE_MEM_REPO" "github.com/thedotmack/claude-mem" "CLAUDE_MEM_REPO points to correct repository"
+assert_contains "$CLAUDE_MEM_REPO" "github.com/ahmet-sami-gul/claude-mem-codex" "CLAUDE_MEM_REPO points to correct repository"
 
 for fn in setup_ai_provider write_settings mask_api_key; do
   if declare -f "$fn" &>/dev/null; then
@@ -744,12 +744,12 @@ test_find_install_dir_marketplace() {
   HOME="$fake_home"
   CLAUDE_MEM_INSTALL_DIR=""
 
-  mkdir -p "${fake_home}/.claude/plugins/marketplaces/thedotmack/plugin/scripts"
-  touch "${fake_home}/.claude/plugins/marketplaces/thedotmack/plugin/scripts/worker-service.cjs"
+  mkdir -p "${fake_home}/.claude/plugins/marketplaces/claude-mem-codex/plugin/scripts"
+  touch "${fake_home}/.claude/plugins/marketplaces/claude-mem-codex/plugin/scripts/worker-service.cjs"
 
   if find_claude_mem_install_dir 2>/dev/null; then
     test_pass "find_claude_mem_install_dir finds dir in marketplace path"
-    assert_eq "${fake_home}/.claude/plugins/marketplaces/thedotmack" "$CLAUDE_MEM_INSTALL_DIR" "CLAUDE_MEM_INSTALL_DIR set correctly for marketplace"
+    assert_eq "${fake_home}/.claude/plugins/marketplaces/claude-mem-codex" "$CLAUDE_MEM_INSTALL_DIR" "CLAUDE_MEM_INSTALL_DIR set correctly for marketplace"
   else
     test_fail "find_claude_mem_install_dir should find dir in marketplace path"
   fi
@@ -1982,7 +1982,7 @@ test_install_sh_has_set_euo_pipefail() {
 test_install_sh_has_set_euo_pipefail
 
 test_install_sh_has_stable_url_in_usage() {
-  if grep -q 'raw.githubusercontent.com/thedotmack/claude-mem/main/openclaw/install.sh' "$INSTALL_SCRIPT"; then
+  if grep -q 'raw.githubusercontent.com/ahmet-sami-gul/claude-mem-codex/main/openclaw/install.sh' "$INSTALL_SCRIPT"; then
     test_pass "install.sh usage comment has stable raw.githubusercontent.com URL"
   else
     test_fail "install.sh should reference stable raw.githubusercontent.com URL in usage"

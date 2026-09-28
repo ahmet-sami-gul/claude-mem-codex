@@ -314,9 +314,11 @@ export class SearchRoutes extends BaseRouteHandler {
       if (!this.projectsHaveObservations(sessionStore, projects, platformSource)) {
         const port = process.env.CLAUDE_MEM_WORKER_PORT ?? settings.CLAUDE_MEM_WORKER_PORT;
         const viewerUrl = `http://localhost:${port}`;
+        // proTrialLine() is '' in the claude-mem-codex fork: drop its line.
+        const proLine = proTrialLine('welcome-hint');
         const hintBody = WELCOME_HINT_TEMPLATE
           .replace('{viewer_url}', viewerUrl)
-          .replace('{pro_trial_line}', proTrialLine('welcome-hint'));
+          .replace('{pro_trial_line}\n', proLine ? `${proLine}\n` : '');
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         // A project with zero observations is exactly where a failing observer
         // hides: without this the health warning (applied inside

@@ -468,7 +468,11 @@ export function describeDuration(ms: number): string {
  * tree just to format a URL.
  */
 export function workerRestartUrl(): string {
-  return `http://localhost:${loadFromFileOnce().CLAUDE_MEM_WORKER_PORT}/restart`;
+  return `${workerBaseUrl()}/restart`;
+}
+
+function workerBaseUrl(): string {
+  return `http://localhost:${loadFromFileOnce().CLAUDE_MEM_WORKER_PORT}`;
 }
 
 /**
@@ -767,15 +771,20 @@ export function renderObserverHealthWarning(state: ObserverHealthState, nowMs: n
     '',
     "Until it's fixed, nothing from this session — or any other — will be remembered.",
     '',
+    // claude-mem-codex fork: no `npx claude-mem` commands here. They run the
+    // official upstream npm package, which only looks for the upstream
+    // marketplace install and offers to install upstream next to this fork.
+    // The warning is served by the worker's context route, so the worker's
+    // own admin endpoints (the ones behind the restart page) apply.
     'Restarting the memory worker clears almost every outage. Do one of these:',
     `  Click to restart:  ${workerRestartUrl()}`,
-    '  Or in a terminal:  npx claude-mem restart',
+    `  Or in a terminal:  curl -X POST ${workerBaseUrl()}/api/admin/restart`,
     '',
-    'Still failing after the restart? Run: npx claude-mem doctor',
+    `Still failing after the restart? Check ${workerBaseUrl()}/api/admin/doctor and the logs in ~/.claude-mem/logs.`,
     // A classified error already says what to do; the generic settings.json
     // remedy is wrong for e.g. Pro users whose allowance ran out.
     ...(action ? [] : [
-      "If doctor comes back clean, check the observer provider's API key, spend limit, and base",
+      "If those look clean, check the observer provider's API key, spend limit, and base",
       'URL in ~/.claude-mem/settings.json. The error above may include a management link.',
     ]),
     '',

@@ -1,18 +1,10 @@
 name: Windows
 
+# claude-mem-codex fork: manual-only. The fork's test suite is only verified
+# on macOS (arm64); this workflow is kept from upstream but does not run on
+# pushes or pull requests. Start it from the Actions tab if you need it.
 on:
-  pull_request:
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'plugin/scripts/**'
-      - 'scripts/**'
-      - 'tests/scripts/**'
-      - 'package.json'
-      - 'bunfig.toml'
-      - '.github/workflows/windows.yml'
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -58,7 +50,7 @@ jobs:
           $env:PATH = "$(Join-Path $env:USERPROFILE '.bun\bin');$env:PATH"
 
           $scratchHome = Join-Path $env:RUNNER_TEMP 'sync-home'
-          $marketplace = Join-Path $scratchHome '.claude\plugins\marketplaces\thedotmack'
+          $marketplace = Join-Path $scratchHome '.claude\plugins\marketplaces\claude-mem-codex'
           $dep = Join-Path $marketplace 'node_modules\pre-existing-dep'
           New-Item -ItemType Directory -Force -Path $dep | Out-Null
           Set-Content -Path (Join-Path $marketplace 'STALE-FROM-OLD-BUILD.js') -Value 'stale'

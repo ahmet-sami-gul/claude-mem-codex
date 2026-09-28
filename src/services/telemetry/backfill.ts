@@ -625,12 +625,18 @@ async function executeHistoricalBackfill(db: Database): Promise<void> {
     return;
   }
 
+  // claude-mem-codex fork: no project key ships in the build (common.ts).
+  // Without CLAUDE_MEM_TELEMETRY_KEY there is no destination: send nothing
+  // and write no marker, so a later opt-in with a key can still backfill.
+  const apiKey = getTelemetryApiKey();
+  if (!apiKey) return;
+
   // Dedicated short-lived client — the live singleton lacks
   // historicalMigration and its shutdown latch must stay untouched. The
   // 5000s make flushAt unreachable (no swallowed background flushes) and
   // keep the whole backfill in ONE request at shutdown, with no silent
   // queue-cap drops for multi-year installs.
-  const client = new PostHog(getTelemetryApiKey(), {
+  const client = new PostHog(apiKey, {
     host: getTelemetryHost(),
     historicalMigration: true,
     flushAt: 5000,

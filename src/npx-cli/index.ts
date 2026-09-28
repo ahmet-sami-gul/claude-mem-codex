@@ -20,6 +20,12 @@ function printHelp(): void {
   console.log(`
 ${styleText('bold', 'claude-mem')} v${version} — persistent memory for AI coding assistants
 
+${styleText('yellow', 'claude-mem-codex (unofficial fork):')} this CLI is not published to npm. Running
+${styleText('cyan', 'npx claude-mem ...')} downloads the official upstream package and installs upstream
+claude-mem, not this fork. Install the fork with:
+  ${styleText('cyan', 'claude plugin marketplace add ahmet-sami-gul/claude-mem-codex')}
+  ${styleText('cyan', 'claude plugin install claude-mem@claude-mem-codex')}
+
 ${styleText('bold', 'Install Commands')} (no Bun required):
   ${styleText('cyan', 'npx claude-mem')}                     Interactive install
   ${styleText('cyan', 'npx claude-mem install')}              Interactive install
@@ -41,7 +47,7 @@ ${styleText('bold', 'Runtime Commands')} (requires Bun, delegates to installed p
   ${styleText('cyan', 'npx claude-mem restart')}              Restart worker service
   ${styleText('cyan', 'npx claude-mem status')}               Show worker status
   ${styleText('cyan', 'npx claude-mem doctor')}               Diagnose install/runtime health (bun, uv, worker)
-  ${styleText('cyan', 'npx claude-mem telemetry status|enable|disable')}   Manage anonymous telemetry (on by default, opt-out)
+  ${styleText('cyan', 'npx claude-mem telemetry status|enable|disable')}   Manage anonymous telemetry (off by default in this fork, opt-in)
   ${styleText('cyan', 'npx claude-mem server start')}         Start server service
   ${styleText('cyan', 'npx claude-mem server stop')}          Stop server service
   ${styleText('cyan', 'npx claude-mem server restart')}       Restart server service

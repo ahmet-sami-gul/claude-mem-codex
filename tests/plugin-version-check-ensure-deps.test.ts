@@ -476,7 +476,7 @@ describe.skipIf(SKIP_NON_UNIX)('version-check Setup-phase ensurePluginDependenci
     // `require.resolve(dep, { paths: [nodeModules] })` reads as tree-scoped but
     // is not: `paths` only seeds Node's lookup, which then walks every ancestor
     // directory and always consults the global folders. Real plugin roots sit
-    // at ~/.claude/plugins/cache/thedotmack/claude-mem/<version>/, so a zod
+    // at ~/.claude/plugins/cache/claude-mem-codex/claude-mem/<version>/, so a zod
     // anywhere above them — or installed globally — answered for the plugin's
     // own. The guard reported a gutted tree as complete and skipped repair,
     // silently reinstating the gh #3755 bug it exists to catch.

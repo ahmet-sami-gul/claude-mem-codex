@@ -18,7 +18,7 @@
  *   1. ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-}}   (host-injected env)
  *   2. (mcp only) $PWD/plugin, $PWD               (repo/dev checkout)
  *   3. cache directories (highest version first, .orphaned_at dirs skipped)
- *   4. $_C/plugins/marketplaces/thedotmack/plugin (marketplace install)
+ *   4. $_C/plugins/marketplaces/claude-mem-codex/plugin (marketplace install)
  */
 
 export type ShellTemplateHost = 'claude-code' | 'claude-code-setup' | 'codex-cli' | 'mcp';
@@ -118,7 +118,7 @@ function candidateBlock(options: ShellTemplateOptions): string {
   }
 
   const extraCacheRoots = isMcp && options.mcpExtraCacheRoots ? options.mcpExtraCacheRoots : [];
-  const allGlobs = [...extraCacheRoots, '$_C/plugins/cache/thedotmack/claude-mem']
+  const allGlobs = [...extraCacheRoots, '$_C/plugins/cache/claude-mem-codex/claude-mem']
     .map((root) => `"${root}"/[0-9]*/`)
     .join(' ');
   // Cache dirs ranked by VERSION descending (zero-padded major.minor.patch
@@ -142,7 +142,7 @@ function candidateBlock(options: ShellTemplateOptions): string {
     `printf '%08d%08d%08d%d %s\\n' "\${_M1:-0}" "\${_M2:-0}" "\${_M3:-0}" "$_G" "$_V"; ` +
     `done 2>/dev/null | sort -r | sed 's/^[^ ]* //';`
   );
-  lines.push(`printf '%s\\n' "$_C/plugins/marketplaces/thedotmack/plugin";`);
+  lines.push(`printf '%s\\n' "$_C/plugins/marketplaces/claude-mem-codex/plugin";`);
 
   // The MCP loop trims a trailing slash inline; the hook loop trims via _R="${_R%/}".
   const trimAssignment = isMcp ? '' : ' _R="${_R%/}";';
@@ -199,9 +199,9 @@ function buildMcpNodeLauncher(options: ShellTemplateOptions): string {
   const candidates = (options.mcpExtraCandidates ?? []).map(shTokenToNode);
   const cacheRoots = [
     ...(options.mcpExtraCacheRoots ?? []),
-    '$_C/plugins/cache/thedotmack/claude-mem',
+    '$_C/plugins/cache/claude-mem-codex/claude-mem',
   ].map(shTokenToNode);
-  const marketplace = shTokenToNode('$_C/plugins/marketplaces/thedotmack/plugin');
+  const marketplace = shTokenToNode('$_C/plugins/marketplaces/claude-mem-codex/plugin');
   const require = JSON.stringify(options.requireFile);
   const notFound = JSON.stringify(`${options.notFoundMessage}\n`);
 
@@ -257,7 +257,7 @@ export function buildCodexWindowsCommand(
     "const C=process.env.CLAUDE_CONFIG_DIR||p.join(h,'.claude');",
     "const roots=[];",
     "for(const v of [process.env.CLAUDE_PLUGIN_ROOT,process.env.PLUGIN_ROOT])if(v)roots.push(v);",
-    "const cache=p.join(C,'plugins','cache','thedotmack','claude-mem');",
+    "const cache=p.join(C,'plugins','cache','claude-mem-codex','claude-mem');",
     // S/W mirror compareVersionsDescending in src/shared/worker-utils.ts and
     // the filter skips .orphaned_at-stamped cache dirs, same as
     // cacheWorkerScriptCandidates — every resolver ranking candidates
@@ -265,7 +265,7 @@ export function buildCodexWindowsCommand(
     "const S=n=>{const q=n.split('-')[0].split('.');return[parseInt(q[0],10)||0,parseInt(q[1],10)||0,parseInt(q[2],10)||0]};",
     "const W=(a,b)=>{const x=S(a),y=S(b);return(y[0]-x[0])||(y[1]-x[1])||(y[2]-x[2])||((a.indexOf('-')<0?0:1)-(b.indexOf('-')<0?0:1))||(a<b?1:a>b?-1:0)};",
     "try{roots.push(...fs.readdirSync(cache).filter(n=>{const ch=n.charAt(0);return ch>='0'&&ch<='9'}).map(n=>p.join(cache,n)).filter(r=>{try{return fs.statSync(r).isDirectory()&&!fs.existsSync(p.join(r,'.orphaned_at'))}catch{return false}}).sort((a,b)=>W(p.basename(a),p.basename(b))))}catch{}",
-    "roots.push(p.join(C,'plugins','marketplaces','thedotmack','plugin'));",
+    "roots.push(p.join(C,'plugins','marketplaces','claude-mem-codex','plugin'));",
     "let R=null;",
     "for(const k of roots){const r=fs.existsSync(p.join(k,'plugin','scripts'))?p.join(k,'plugin'):k;if(fs.existsSync(p.join(r,'scripts','bun-runner.js'))&&fs.existsSync(p.join(r,'scripts','worker-service.cjs'))){R=r;break}}",
     "if(!R){process.stderr.write('claude-mem: plugin scripts not found\\n');process.exit(1)}",

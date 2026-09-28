@@ -119,7 +119,7 @@ function findMissingDependencies(pluginRoot) {
     // looks tree-scoped but is not: `paths` seeds Node's lookup, which then
     // walks every ancestor directory and always consults the global folders
     // ($HOME/.node_modules, $PREFIX/lib/node). Plugin roots live at
-    // ~/.claude/plugins/cache/thedotmack/claude-mem/<version>/, so a copy of a
+    // ~/.claude/plugins/cache/claude-mem-codex/claude-mem/<version>/, so a copy of a
     // dependency anywhere above them - or installed globally - would satisfy
     // the probe and let this guard report a gutted tree as complete, silently
     // reintroducing the very bug it exists to catch (gh #3872 review).
@@ -320,6 +320,12 @@ function emitUpgradeHint(message) {
   }
 }
 
+// claude-mem-codex fork: upstream's hint ran its npx installer, which downloads
+// and installs the official upstream npm package next to this fork. The fork
+// is installed and updated through its plugin marketplace only.
+const FORK_REINSTALL_HINT =
+  'update with: claude plugin marketplace update claude-mem-codex && claude plugin install claude-mem@claude-mem-codex';
+
 const LEGACY_VERSION_MARKER_RE =
   /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
@@ -341,17 +347,20 @@ function readInstallMarkerVersion(markerPath) {
 try {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
   const markerPath = join(ROOT, '.install-version');
+  // claude-mem-codex fork: only upstream's npx installer writes this marker
+  // (src/npx-cli/install/setup-runtime.ts writeInstallMarker), and the fork
+  // does not publish that installer. A plugin-marketplace install never has a
+  // marker, so its absence is the normal state here, not "not yet set up".
   if (!existsSync(markerPath)) {
-    emitUpgradeHint('claude-mem: runtime not yet set up - run: npx claude-mem@latest install');
     process.exit(0);
   }
   const markerVersion = readInstallMarkerVersion(markerPath);
   if (!markerVersion) {
-    emitUpgradeHint('claude-mem: install marker unreadable - run: npx claude-mem@latest install');
+    emitUpgradeHint(`claude-mem: install marker unreadable - ${FORK_REINSTALL_HINT}`);
   } else if (markerVersion !== pkg.version) {
-    emitUpgradeHint(`claude-mem: upgraded to v${pkg.version} - run: npx claude-mem@latest install`);
+    emitUpgradeHint(`claude-mem: upgraded to v${pkg.version} - ${FORK_REINSTALL_HINT}`);
   }
 } catch {
-  emitUpgradeHint('claude-mem: install marker unreadable - run: npx claude-mem@latest install');
+  emitUpgradeHint(`claude-mem: install marker unreadable - ${FORK_REINSTALL_HINT}`);
 }
 process.exit(0);

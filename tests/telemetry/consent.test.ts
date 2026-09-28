@@ -24,17 +24,18 @@ const disabledConfig: TelemetryConfig = {
 };
 
 describe('resolveTelemetryConsent', () => {
-  it('defaults to on (opt-out) with null config and empty env', () => {
-    expect(resolveTelemetryConsent({}, null)).toBe(true);
+  // claude-mem-codex fork: telemetry is opt-in (upstream defaults on).
+  it('defaults to OFF (opt-in) with null config and empty env', () => {
+    expect(resolveTelemetryConsent({}, null)).toBe(false);
   });
 
-  it('a config without an enabled decision falls through to the default (on)', () => {
+  it('a config without an enabled decision falls through to the default (off)', () => {
     const undecided: TelemetryConfig = {
       installId: '00000000-0000-4000-8000-000000000002',
       decidedAt: '',
     };
-    expect(resolveTelemetryConsent({}, undecided)).toBe(true);
-    expect(explainTelemetryConsent({}, undecided)).toEqual({ enabled: true, source: 'default' });
+    expect(resolveTelemetryConsent({}, undecided)).toBe(false);
+    expect(explainTelemetryConsent({}, undecided)).toEqual({ enabled: false, source: 'default' });
   });
 
   it('DO_NOT_TRACK=1 beats an enabled config', () => {
@@ -89,7 +90,8 @@ describe('resolveTelemetryConsent', () => {
 
   it('unrecognized CLAUDE_MEM_TELEMETRY values fall through to config', () => {
     expect(resolveTelemetryConsent({ CLAUDE_MEM_TELEMETRY: 'maybe' }, disabledConfig)).toBe(false);
-    expect(resolveTelemetryConsent({ CLAUDE_MEM_TELEMETRY: 'maybe' }, null)).toBe(true);
+    expect(resolveTelemetryConsent({ CLAUDE_MEM_TELEMETRY: 'maybe' }, enabledConfig)).toBe(true);
+    expect(resolveTelemetryConsent({ CLAUDE_MEM_TELEMETRY: 'maybe' }, null)).toBe(false);
   });
 
   it('config enabled=true enables with empty env', () => {
@@ -140,8 +142,8 @@ describe('explainTelemetryConsent', () => {
     });
   });
 
-  it('falls back to default-on (opt-out) with no env and no config', () => {
-    expect(explainTelemetryConsent({}, null)).toEqual({ enabled: true, source: 'default' });
+  it('falls back to default-off (opt-in, claude-mem-codex fork) with no env and no config', () => {
+    expect(explainTelemetryConsent({}, null)).toEqual({ enabled: false, source: 'default' });
   });
 
   it('unrecognized env values fall through to config/default', () => {
@@ -150,7 +152,7 @@ describe('explainTelemetryConsent', () => {
       source: 'config',
     });
     expect(explainTelemetryConsent({ CLAUDE_MEM_TELEMETRY: 'maybe' }, null)).toEqual({
-      enabled: true,
+      enabled: false,
       source: 'default',
     });
   });
@@ -259,8 +261,9 @@ describe('telemetry config persistence', () => {
       const config = loadTelemetryConfig();
       expect(config?.installId).toBe(id);
       expect(config?.enabled).toBeUndefined();
-      // The opt-out default must survive the ID bootstrap.
-      expect(explainTelemetryConsent({}, config)).toEqual({ enabled: true, source: 'default' });
+      // The ID bootstrap must not record consent: the opt-in default (off)
+      // still applies afterwards.
+      expect(explainTelemetryConsent({}, config)).toEqual({ enabled: false, source: 'default' });
     });
 
     it('returns the existing install ID on subsequent calls', () => {

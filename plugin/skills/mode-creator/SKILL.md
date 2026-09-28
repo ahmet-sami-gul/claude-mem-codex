@@ -127,14 +127,14 @@ If the agent environment cannot give the user control of an interactive terminal
 
 ## 7. Restart and prove the result
 
-Read the configured runtime before restarting. For a worker runtime, use the verified CLI restart path:
+Read the configured runtime before restarting. For a worker runtime, use the verified CLI restart path: run this installed plugin's worker script with Bun (in claude-mem-codex, do not use `npx claude-mem`: it runs the official upstream npm package, which cannot see this fork's install and offers to install upstream next to it):
 
 ```bash
-npx claude-mem restart
-npx claude-mem status
+bun "$CLAUDE_PLUGIN_ROOT/scripts/worker-service.cjs" restart
+bun "$CLAUDE_PLUGIN_ROOT/scripts/worker-service.cjs" status
 ```
 
-If the CLI shim is unavailable, run the installed plugin's `scripts/worker-service.cjs restart` with Bun. Do not use a bare restart HTTP request when the verified CLI path is available.
+If `CLAUDE_PLUGIN_ROOT` is not set in your shell, use the plugin's directory under `~/.claude/plugins/cache/claude-mem-codex/claude-mem/<version>/` (or `~/.claude/plugins/marketplaces/claude-mem-codex/plugin/`). Do not use a bare restart HTTP request when the verified CLI path is available.
 
 Verify all of the following:
 

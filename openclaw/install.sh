@@ -555,7 +555,7 @@ run_openclaw() {
   fi
 }
 
-CLAUDE_MEM_REPO="https://github.com/thedotmack/claude-mem.git"
+CLAUDE_MEM_REPO="https://github.com/ahmet-sami-gul/claude-mem-codex.git"
 CLAUDE_MEM_BRANCH="${CLI_BRANCH:-main}"
 PLUGIN_FRESHLY_INSTALLED=""
 
@@ -1053,7 +1053,7 @@ find_claude_mem_install_dir() {
   local -a search_paths=(
     "$resolved_dir"
     "${HOME}/.openclaw/extensions/claude-mem"
-    "${HOME}/.claude/plugins/marketplaces/thedotmack"
+    "${HOME}/.claude/plugins/marketplaces/claude-mem-codex"
     "${HOME}/.openclaw/plugins/claude-mem"
   )
 
@@ -1098,7 +1098,7 @@ start_worker() {
     error "Cannot find claude-mem plugin installation directory"
     error "Expected worker-service.cjs in one of:"
     error "  ~/.openclaw/extensions/claude-mem/plugin/scripts/"
-    error "  ~/.claude/plugins/marketplaces/thedotmack/plugin/scripts/"
+    error "  ~/.claude/plugins/marketplaces/claude-mem-codex/plugin/scripts/"
     error ""
     error "Try reinstalling the plugin and re-running this installer."
     return 1
@@ -1488,7 +1488,7 @@ print_completion_summary() {
   fi
   echo ""
   echo -e "  ${COLOR_BOLD}To re-run this installer:${COLOR_RESET}"
-  echo "  bash <(curl -fsSL https://install.cmem.ai/openclaw.sh)"
+  echo "  bash <(curl -fsSL https://raw.githubusercontent.com/ahmet-sami-gul/claude-mem-codex/main/openclaw/install.sh)"
   echo ""
 }
 

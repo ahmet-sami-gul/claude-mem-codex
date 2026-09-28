@@ -8,9 +8,9 @@
  * "Next Steps" block, and the viewer header. Keeping the wording and the URL
  * here means the funnel copy changes in one edit instead of five.
  *
- * The viewer keeps its own copy in `src/ui/viewer/constants/promo.ts` — its
- * tsconfig pins rootDir to the viewer directory, so it cannot import this file.
- * Change both together.
+ * The viewer kept its own copy in `src/ui/viewer/constants/promo.ts` (its
+ * tsconfig pins rootDir to the viewer directory); the claude-mem-codex fork
+ * removed it together with the viewer's trial button (see PRO_PROMO_ENABLED).
  */
 
 /** Landing page for the trial (cmem-pro `src/app/(landing)/pro/page.tsx`). */
@@ -54,10 +54,20 @@ export const PLAN_USAGE_GAIN_PERCENT = 100;
 export const PRO_TRIAL_PITCH = `Get up to ${PLAN_USAGE_GAIN_PERCENT}% more usage from your plan — memory runs off-plan, free for ${PRO_TRIAL_DAYS} days`;
 
 /**
+ * claude-mem-codex fork: the hook and welcome-hint surfaces do not advertise
+ * upstream's commercial cmem.ai service. This unofficial fork must not read as
+ * the official product, so proTrialLine() is empty and the viewer header has
+ * no trial button. (CMEM Pro itself keeps working for users who set it up.)
+ */
+export const PRO_PROMO_ENABLED = false;
+
+/**
  * One-line pitch + link, for plain-text surfaces (hook banners, welcome hint).
  * Callers that want ANSI styling should compose from PRO_TRIAL_PITCH and
  * proTrialUrl() instead so the escape codes stay at the presentation layer.
+ * Returns '' while PRO_PROMO_ENABLED is off; callers drop the empty line.
  */
 export function proTrialLine(source: ProPromoSource): string {
+  if (!PRO_PROMO_ENABLED) return '';
   return `${String.fromCodePoint(0x2728)} ${PRO_TRIAL_PITCH} ${proTrialUrl(source)}`;
 }

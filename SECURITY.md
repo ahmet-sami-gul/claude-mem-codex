@@ -1,5 +1,17 @@
 # Security Policy
 
+## claude-mem-codex (this unofficial fork)
+
+This repository is **claude-mem-codex**, an unofficial fork of [claude-mem](https://github.com/thedotmack/claude-mem) by Alex Newman. It is not affiliated with or endorsed by the claude-mem project, Anthropic or OpenAI, and the upstream maintainers do not maintain this fork's code.
+
+- **Report vulnerabilities in claude-mem-codex privately through this repository**: Security tab → **Report a vulnerability** (<https://github.com/ahmet-sami-gul/claude-mem-codex/security/advisories/new>). Do **not** open a public issue, pull request or discussion. This covers everything the fork adds or changes, in particular the Codex CLI observer provider and its lockdown, the settings-API hardening and the other changes listed in [CHANGES-FORK.md](./CHANGES-FORK.md).
+- **Do not send reports about this fork to the upstream maintainer.** If an issue also affects upstream claude-mem, you may additionally report it upstream as described in the upstream policy below.
+- Only the latest version of claude-mem-codex is supported. It is maintained on a best-effort basis; there is no guaranteed response time.
+
+The rest of this file is the upstream claude-mem security policy at the fork point, kept for reference. Its contact addresses, response commitments and "latest version" refer to upstream claude-mem, not to this fork.
+
+---
+
 ## Supported Versions
 
 Only the latest released version of `claude-mem` receives security updates. Please upgrade to the latest version before reporting a vulnerability.

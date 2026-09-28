@@ -5,6 +5,10 @@ description: "Install Claude-Mem plugin for persistent memory across sessions"
 
 # Installation Guide
 
+<Note>
+**claude-mem-codex (unofficial fork).** Install this fork from its plugin marketplace ([Option 3](#option-3-plugin-marketplace)): `claude plugin marketplace add ahmet-sami-gul/claude-mem-codex`, then `claude plugin install claude-mem@claude-mem-codex`. Remove the official claude-mem first. The `npx claude-mem ...` commands on this page download the official upstream npm package and install upstream claude-mem, not this fork; the fork does not publish an npm package.
+</Note>
+
 **[Grok mem](https://grok-mem.ai)** — Grok Mem is how Grok Bots remember. Sits next to Grok's own memory. Does not replace it. The package name is still [`claude-mem`](https://www.npmjs.com/package/claude-mem).
 
 ## Quick Start
@@ -53,8 +57,8 @@ Headless or already signed in? See [CMEM Pro (manual / headless)](/cmem-pro-head
 Install Claude-Mem directly from the plugin marketplace inside Claude Code:
 
 ```bash
-/plugin marketplace add thedotmack/claude-mem
-/plugin install claude-mem
+/plugin marketplace add ahmet-sami-gul/claude-mem-codex
+/plugin install claude-mem@claude-mem-codex
 ```
 
 Both methods will automatically configure hooks and start the worker service. Start a new Claude Code session and you'll see context from previous sessions automatically loaded.
@@ -79,8 +83,8 @@ For development or testing, you can clone and build from source:
 
 ```bash
 # Clone the repository
-git clone https://github.com/thedotmack/claude-mem.git
-cd claude-mem
+git clone https://github.com/ahmet-sami-gul/claude-mem-codex.git
+cd claude-mem-codex
 
 # Install dependencies
 npm install
@@ -148,7 +152,7 @@ See [CMEM Pro (manual / headless)](/cmem-pro-headless).
 
 Upgrades are automatic when updating via the plugin marketplace. After an external upgrade (for example `claude plugin update`), the Setup hook detects a version-marker mismatch and asks you to run `npx claude-mem repair`, which installs any missing runtime dependencies and refreshes the marker.
 
-See [CHANGELOG](https://github.com/thedotmack/claude-mem/blob/main/CHANGELOG.md) for complete version history.
+See [CHANGELOG](https://github.com/ahmet-sami-gul/claude-mem-codex/blob/HEAD/CHANGELOG.md) for the upstream version history and [CHANGES-FORK.md](https://github.com/ahmet-sami-gul/claude-mem-codex/blob/HEAD/CHANGES-FORK.md) for the changes in this fork.
 
 ## Next Steps
 

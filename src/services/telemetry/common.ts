@@ -12,16 +12,23 @@ const packageVersion =
   typeof __DEFAULT_PACKAGE_VERSION__ !== 'undefined' ? __DEFAULT_PACKAGE_VERSION__ : '0.0.0-dev';
 
 /**
- * Publishable PostHog project token (phc_...). Publishable tokens are safe to
- * embed: the capture endpoints are public POST-only ingestion.
- * `CLAUDE_MEM_TELEMETRY_KEY` always overrides this constant.
+ * claude-mem-codex fork: no PostHog project key ships in this build. Upstream
+ * embeds its own publishable project token here; the fork removed it so no
+ * event can reach upstream's analytics. Telemetry has a destination only when
+ * the operator sets `CLAUDE_MEM_TELEMETRY_KEY` (and, optionally,
+ * `CLAUDE_MEM_TELEMETRY_HOST`) to a PostHog project of their own — and even
+ * then nothing is sent without an explicit opt-in (consent.ts defaults off).
  */
-export const TELEMETRY_PUBLIC_KEY = 'phc_BKJAeNbpj932N9qEiU6qhutZEiu6LLfRpXfTbLM9MLaG';
-
 export const DEFAULT_TELEMETRY_HOST = 'https://us.i.posthog.com';
 
-export function getTelemetryApiKey(): string {
-  return process.env.CLAUDE_MEM_TELEMETRY_KEY || TELEMETRY_PUBLIC_KEY;
+/**
+ * The PostHog project key from `CLAUDE_MEM_TELEMETRY_KEY`, or null when it is
+ * unset or blank. Null means "no destination": every transport (worker client,
+ * CLI direct POST, historical backfill) sends nothing.
+ */
+export function getTelemetryApiKey(): string | null {
+  const key = process.env.CLAUDE_MEM_TELEMETRY_KEY?.trim();
+  return key ? key : null;
 }
 
 export function getTelemetryHost(): string {

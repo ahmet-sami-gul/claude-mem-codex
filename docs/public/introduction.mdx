@@ -11,6 +11,10 @@ Claude-Mem seamlessly preserves context across sessions by automatically capturi
 
 ## Quick Start
 
+<Note>
+**claude-mem-codex (unofficial fork).** This fork installs only from its plugin marketplace: `/plugin marketplace add ahmet-sami-gul/claude-mem-codex`, then `/plugin install claude-mem@claude-mem-codex`. `npx claude-mem install` downloads the official upstream npm package and installs upstream claude-mem, not this fork.
+</Note>
+
 Install with a single command:
 
 ```bash
@@ -20,8 +24,8 @@ npx claude-mem install
 Or install from the plugin marketplace inside Claude Code:
 
 ```bash
-/plugin marketplace add thedotmack/claude-mem
-/plugin install claude-mem
+/plugin marketplace add ahmet-sami-gul/claude-mem-codex
+/plugin install claude-mem@claude-mem-codex
 ```
 
 Restart Claude Code. Context from previous sessions will automatically appear in new sessions.

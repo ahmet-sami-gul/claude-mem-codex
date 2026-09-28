@@ -140,8 +140,14 @@ export const contextHandler: EventHandler = {
       ? `claude-mem free trial: ${daysLeft} day${daysLeft === 1 ? '' : 's'} left`
       : null;
 
+    // proTrialLine() is '' in the claude-mem-codex fork; filter(Boolean) drops
+    // it (and an absent trialDaysLine) without leaving a blank line.
     const systemMessage = showTerminalOutput && displayContent
-      ? `${displayContent}\n\nView Observations Live @ http://localhost:${port}\n${proTrialLine('session-start')}${trialDaysLine ? `\n${trialDaysLine}` : ''}`
+      ? [
+        `${displayContent}\n\nView Observations Live @ http://localhost:${port}`,
+        proTrialLine('session-start'),
+        trialDaysLine,
+      ].filter(Boolean).join('\n')
       : undefined;
 
     return {

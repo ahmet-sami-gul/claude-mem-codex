@@ -1,9 +1,10 @@
 name: CI
 
+# claude-mem-codex fork: manual-only. The fork's test suite is only verified
+# on macOS (arm64); this workflow is kept from upstream but does not run on
+# pushes or pull requests. Start it from the Actions tab if you need it.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -24,8 +25,7 @@ jobs:
 
       # The repo intentionally gitignores package-lock.json (.gitignore), so
       # `cache: 'npm'` and `npm ci` (both require a committed lockfile) cannot
-      # be used here — matches windows.yml / npm-publish.yml, which install the
-      # same way.
+      # be used here — matches windows.yml, which installs the same way.
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 

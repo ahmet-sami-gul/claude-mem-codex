@@ -1,23 +1,18 @@
 {
-  "name": "thedotmack",
+  "name": "claude-mem-codex",
   "owner": {
-    "name": "Alex Newman"
+    "name": "Ahmet Sami Gül",
+    "url": "https://github.com/ahmet-sami-gul"
   },
   "metadata": {
-    "description": "Plugins by Alex Newman (thedotmack)"
+    "description": "Unofficial fork of claude-mem (by Alex Newman) with a locked-down Codex CLI observer provider. Not affiliated with or endorsed by the claude-mem project, Anthropic or OpenAI."
   },
   "plugins": [
     {
       "name": "claude-mem",
-      "version": "13.25.504",
+      "version": "13.25.505",
       "source": "./plugin",
-      "description": "Persistent memory system for Claude Code - context compression across sessions"
-    },
-    {
-      "name": "claude-mem-cowork",
-      "version": "0.1.3",
-      "source": "./cowork",
-      "description": "Claude-Mem for Cowork (Claude app cloud sessions) - hooks stream tool use to cmem.ai and inject observations into new sessions and agents"
+      "description": "Persistent memory for Claude Code (unofficial claude-mem fork with a Codex CLI observer provider)"
     }
   ]
 }

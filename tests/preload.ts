@@ -30,10 +30,12 @@ if (!process.env.CLAUDE_MEM_DATA_DIR) {
  *     process, so a per-file mock.module registers too late once any earlier
  *     test file has touched those modules — the cached telemetry module keeps
  *     the real PostHog binding.
- *  2. Telemetry consent is default-on and the publishable key ships in the
- *     code, so without this mock a full-suite run constructs a REAL PostHog
- *     client and can flush fabricated test events into production analytics
- *     (flushAt: 20 / flushInterval: 10s vs a ~25s suite).
+ *  2. Telemetry tests opt in and set a test CLAUDE_MEM_TELEMETRY_KEY, so
+ *     without this mock a full-suite run would construct a REAL PostHog client
+ *     and try to flush fabricated test events (flushAt: 20 / flushInterval:
+ *     10s vs a ~25s suite). (claude-mem-codex fork: no project key ships and
+ *     consent defaults off; tests/telemetry/no-network-default.test.ts proves
+ *     the default configuration sends nothing, with the real SDK.)
  *
  * Tests assert against these recorded calls — see
  * tests/telemetry/telemetry-client.test.ts.

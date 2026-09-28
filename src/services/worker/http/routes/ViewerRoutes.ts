@@ -61,6 +61,9 @@ if (resolvedViewerHtmlPath) {
  * - /api/readiness ok. A bound port is not a ready worker; the successor opens
  *   the database, bootstraps chroma and connects MCP after it starts listening.
  */
+// claude-mem-codex fork: the give-up text names a new Claude Code session (its
+// hooks start the worker) and the logs, not the upstream `npx claude-mem doctor`,
+// which runs the official npm package and cannot see this fork's install.
 const RESTART_PAGE_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -136,7 +139,7 @@ const RESTART_PAGE_HTML = `<!doctype html>
     if (await waitForSuccessor(Date.now() + 60000)) {
       status.textContent = 'Memory worker restarted. You can close this tab.';
     } else {
-      status.textContent = 'Still not answering. Run: npx claude-mem doctor';
+      status.textContent = 'Still not answering. Start a new Claude Code session to relaunch the worker, and check ~/.claude-mem/logs if it keeps failing.';
       button.disabled = false;
     }
   });

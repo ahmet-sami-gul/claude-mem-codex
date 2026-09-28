@@ -123,7 +123,7 @@ describe('Uninstall: clear Claude Code auto-memory env var', () => {
       writeFileSync(
         settingsPath,
         JSON.stringify({
-          enabledPlugins: { 'claude-mem@thedotmack': true, 'other-plugin@vendor': true },
+          enabledPlugins: { 'claude-mem@claude-mem-codex': true, 'other-plugin@vendor': true },
           env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
         }, null, 2),
       );
@@ -131,7 +131,7 @@ describe('Uninstall: clear Claude Code auto-memory env var', () => {
       removeFromClaudeSettings();
 
       const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
-      expect(settings.enabledPlugins['claude-mem@thedotmack']).toBeUndefined();
+      expect(settings.enabledPlugins['claude-mem@claude-mem-codex']).toBeUndefined();
       expect(settings.enabledPlugins['other-plugin@vendor']).toBe(true);
       expect(settings.env).toBeUndefined();
     });
