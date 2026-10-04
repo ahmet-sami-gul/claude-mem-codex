@@ -245,10 +245,11 @@ export const CODEX_V2_MODEL_PINS: Readonly<Record<string, string>> = Object.free
 });
 
 /**
- * Every feature turned off with `--disable=<name>`: the 27 Phase 0 names, then
- * the codex-cli 0.156.1 additions. All 52 are known names on 0.156.1; the new
- * ones are unknown on 0.144.4, where an unknown `--disable` is a hard error, so
- * an older binary is refused rather than half locked down. After these (and
+ * Every feature turned off with `--disable=<name>`: the 27 Phase 0 names, the
+ * codex-cli 0.156.1 additions, then the 0.160.0 one. All 53 are known names on
+ * 0.156.1 and 0.160.0; the 0.156 additions are unknown on 0.144.4, where an
+ * unknown `--disable` is a hard error, so an older binary is refused rather
+ * than half locked down. After these (and
  * CODEX_CONFIG_PINS), `codex features list` shows only
  * CODEX_EXPECTED_ENABLED_FEATURES and CODEX_FORCED_ENABLED_FEATURES enabled,
  * besides flags in the "removed" stage.
@@ -315,15 +316,25 @@ export const CODEX_DISABLED_FEATURES = Object.freeze([
   'token_budget',
   'agent_message_board',
   'unified_exec_zsh_fork',
+  // codex-cli 0.160.0: stable and on by default. It starts the shared local
+  // daemon for eligible interactive launches; a one-shot exec is not one, but
+  // nothing in the observer may leave a background process behind.
+  'daemon_auto_start',
 ] as const);
 
 /**
  * Features the self-check tolerates as still enabled after the disables
  * (flags in the "removed" stage are ignored separately). remote_compaction_v2
  * is in the "removed" stage on 0.156.1.
+ *
+ * write_stdin_approval (stable and on by default since codex-cli 0.160.0) only
+ * adds an approval step before input is written to an escalated unified-exec
+ * terminal. The observer never has a terminal (shell_tool is off), so it is
+ * left on rather than switching off a safeguard.
  */
 export const CODEX_EXPECTED_ENABLED_FEATURES = Object.freeze([
   'enable_request_compression',
+  'write_stdin_approval',
 ] as const);
 
 /**

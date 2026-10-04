@@ -1,7 +1,7 @@
 /**
  * codex-self-check (plan 2.10, 5/L3, 6).
  *
- * Parser tests use the codex-cli 0.156.1 captures (features list and
+ * Parser tests use the codex-cli 0.160.0 and 0.156.1 captures (features list and
  * prompt-input with the full pins, taken model-free with an empty CODEX_HOME)
  * and a catalog fixture trimmed from the bundled 0.156.1 models.json; the
  * Phase 0 (0.144.4) captures prove an old binary is refused.
@@ -60,8 +60,10 @@ import {
 const posixIt = IS_WINDOWS ? it.skip : it;
 const SPAWN_TEST_TIMEOUT_MS = 20_000;
 
-const FEATURES = readFileSync(fixturePath('v0156-features-list-locked.txt'), 'utf8');
-const PROMPT_INPUT = readFileSync(fixturePath('v0156-prompt-input-locked.json'), 'utf8');
+const FEATURES = readFileSync(fixturePath('v0160-features-list-locked.txt'), 'utf8');
+const FEATURES_0156 = readFileSync(fixturePath('v0156-features-list-locked.txt'), 'utf8');
+const PROMPT_INPUT = readFileSync(fixturePath('v0160-prompt-input-locked.json'), 'utf8');
+const PROMPT_INPUT_0156 = readFileSync(fixturePath('v0156-prompt-input-locked.json'), 'utf8');
 const MODELS = readFileSync(fixturePath('v0156-models-catalog.json'), 'utf8');
 const P0_FEATURES = readFileSync(fixturePath('p0-features-list-locked.txt'), 'utf8');
 const P0_PROMPT_INPUT = readFileSync(fixturePath('p0-prompt-input-locked.json'), 'utf8');
@@ -99,7 +101,7 @@ interface ScriptedRunner extends CodexProbeRunner {
 function scriptedRunner(overrides: Partial<Record<CodexProbeRequest['kind'], CodexProbeResponse | (() => Promise<CodexProbeResponse>)>> = {}): ScriptedRunner {
   const calls: CodexProbeRequest[] = [];
   const defaults: Record<CodexProbeRequest['kind'], CodexProbeResponse> = {
-    version: ok('codex-cli 0.156.1\n'),
+    version: ok('codex-cli 0.160.0\n'),
     login_status: ok('', 'Logged in using ChatGPT\n'),
     models_catalog: ok(MODELS),
     features_list: ok(FEATURES),
@@ -137,8 +139,19 @@ function promptInputWith(mutate: (items: unknown[]) => unknown[]): string {
 // ---------------------------------------------------------------------------
 
 describe('features list', () => {
-  it('parses the 0.156.1 capture (dotted names included) and accepts it', () => {
+  it('parses the 0.160.0 capture and accepts it: write_stdin_approval may stay on, daemon_auto_start is off', () => {
     const rows = parseCodexFeaturesList(FEATURES);
+    expect(rows).not.toBeNull();
+    expect(rows!.filter((r) => r.enabled && r.stage !== 'removed').map((r) => r.name).sort()).toEqual(['enable_request_compression', 'unified_exec', 'write_stdin_approval']);
+    expect(rows!.find((r) => r.name === 'daemon_auto_start')).toEqual({ name: 'daemon_auto_start', stage: 'stable', enabled: false });
+    for (const name of CODEX_DISABLED_FEATURES) {
+      expect(rows!.some((r) => r.name === name)).toBe(true);
+    }
+    expect(evaluateCodexFeatures(rows!)).toEqual({ ok: true });
+  });
+
+  it('parses the 0.156.1 capture (dotted names included) and accepts it', () => {
+    const rows = parseCodexFeaturesList(FEATURES_0156);
     expect(rows).not.toBeNull();
     expect(rows!.length).toBeGreaterThan(140);
     expect(rows!.find((r) => r.name === 'apply_patch_streaming_events')).toEqual({ name: 'apply_patch_streaming_events', stage: 'under development', enabled: false });
@@ -235,11 +248,12 @@ describe('features list', () => {
 });
 
 describe('prompt-input canary', () => {
-  it('accepts exactly [developer == constant, user == canary] (0.156.1 and Phase 0 captures)', () => {
-    // 0.156.1 adds a per-item id and metadata; the evaluator ignores extra fields.
-    const items = JSON.parse(PROMPT_INPUT) as Array<Record<string, unknown>>;
+  it('accepts exactly [developer == constant, user == canary] (0.160.0, 0.156.1 and Phase 0 captures)', () => {
+    // Since 0.156.1 each item carries an id and metadata; the evaluator ignores extra fields.
+    const items = JSON.parse(PROMPT_INPUT_0156) as Array<Record<string, unknown>>;
     expect(items.every((item) => typeof item.id === 'string' && 'internal_chat_message_metadata_passthrough' in item)).toBe(true);
     expect(evaluateCodexPromptInput(PROMPT_INPUT)).toEqual({ ok: true });
+    expect(evaluateCodexPromptInput(PROMPT_INPUT_0156)).toEqual({ ok: true });
     expect(evaluateCodexPromptInput(P0_PROMPT_INPUT)).toEqual({ ok: true });
   });
 
@@ -306,15 +320,17 @@ describe('login status', () => {
 
 describe('version range', () => {
   it(`accepts ${CODEX_TESTED_VERSION_RANGE.label} only`, () => {
-    expect(CODEX_TESTED_VERSION_RANGE).toEqual({ minInclusive: [0, 156, 1], maxExclusive: [0, 157, 0], label: '>=0.156.1 <0.157' });
-    expect(parseCodexVersion('codex-cli 0.156.1\n')).toEqual({ major: 0, minor: 156, patch: 1, prerelease: null, raw: '0.156.1' });
-    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.156.1')!)).toBe(true);
-    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.156.12')!)).toBe(true);
-    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.156.0')!)).toBe(false);
+    expect(CODEX_TESTED_VERSION_RANGE).toEqual({ minInclusive: [0, 160, 0], maxExclusive: [0, 161, 0], label: '>=0.160.0 <0.161' });
+    expect(parseCodexVersion('codex-cli 0.160.0\n')).toEqual({ major: 0, minor: 160, patch: 0, prerelease: null, raw: '0.160.0' });
+    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.160.0')!)).toBe(true);
+    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.160.12')!)).toBe(true);
+    // 0.156.x was the previous tested range; 0.157-0.159 were never tested.
+    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.156.1')!)).toBe(false);
+    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.159.9')!)).toBe(false);
     expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.144.4')!)).toBe(false);
-    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.157.0')!)).toBe(false);
+    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.161.0')!)).toBe(false);
     expect(isCodexVersionTested(parseCodexVersion('codex-cli 1.0.0')!)).toBe(false);
-    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.156.1-alpha.2')!)).toBe(false);
+    expect(isCodexVersionTested(parseCodexVersion('codex-cli 0.160.0-alpha.2')!)).toBe(false);
     expect(parseCodexVersion('codex-cli dev build')).toBeNull();
   });
 });
@@ -369,7 +385,7 @@ describe('verifyCodexLockdown (injected probe runner)', () => {
     const result = await verifyCodexLockdown(binary, { probeRunner: runner });
 
     expect(result.state).toBe('passed');
-    expect(result.version).toBe('0.156.1');
+    expect(result.version).toBe('0.160.0');
     expect(result.authMethod).toBe('chatgpt');
     expect(result.failure).toBeNull();
     expect([...CODEX_PROBE_ORDER]).toEqual(PROBE_KINDS);
@@ -386,7 +402,7 @@ describe('verifyCodexLockdown (injected probe runner)', () => {
     expect(isCodexLockdownPassed(binary)).toBe(true);
     expect(getCodexAuthMethodDescription(binary)).toBe('Codex CLI (ChatGPT login)');
     // The version is recorded on the resolver fingerprint.
-    expect(findCodexExecutable({ explicitPath: binary }).fingerprint.version).toBe('0.156.1');
+    expect(findCodexExecutable({ explicitPath: binary }).fingerprint.version).toBe('0.160.0');
   });
 
   it('"pending" and "never run" are not "passed"', async () => {
@@ -397,7 +413,7 @@ describe('verifyCodexLockdown (injected probe runner)', () => {
 
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const runner = scriptedRunner({ version: async () => { await gate; return ok('codex-cli 0.156.1'); } });
+    const runner = scriptedRunner({ version: async () => { await gate; return ok('codex-cli 0.160.0'); } });
     const pending = verifyCodexLockdown(binary, { probeRunner: runner });
 
     expect(getCodexLockdownStatus(binary)?.state).toBe('pending');
@@ -414,7 +430,7 @@ describe('verifyCodexLockdown (injected probe runner)', () => {
     const binary = dummyBinary();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const runner = scriptedRunner({ version: async () => { await gate; return ok('codex-cli 0.156.1'); } });
+    const runner = scriptedRunner({ version: async () => { await gate; return ok('codex-cli 0.160.0'); } });
 
     const a = verifyCodexLockdown(binary, { probeRunner: runner });
     const b = verifyCodexLockdown(binary, { probeRunner: runner });
@@ -605,7 +621,7 @@ describe('verifyCodexLockdown (injected probe runner)', () => {
     }
   });
 
-  it('the model/CLI gate passes GPT-6 models on 0.156.1, and astra on 0.153.0 only with allowUntestedVersion', async () => {
+  it('the model/CLI gate passes GPT-6 models on 0.160.0, and astra on 0.153.0 only with allowUntestedVersion', async () => {
     for (const model of ['gpt-6-luna', 'gpt-6-sol', 'gpt-6-astra']) {
       const runner = scriptedRunner({
         models_catalog: ok(catalogWith([{ slug: model, tool_mode: 'code_mode_only', experimental_supported_tools: ['send_user_message_async', 'clock'] }])),
