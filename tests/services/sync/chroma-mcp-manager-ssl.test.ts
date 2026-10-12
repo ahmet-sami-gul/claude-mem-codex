@@ -127,6 +127,7 @@ function expectLauncherPrefixBeforeMode(args: string[], mode: 'http' | 'persiste
     '--python', '3.13',
     '--with', 'onnxruntime>=1.20',
     '--with', 'protobuf<7',
+    '--with', 'pydantic<2.12',
   ]);
 }
 
