@@ -280,12 +280,12 @@ describe('Codex observer lockdown', () => {
 
   describe('L3: self-check canary and features', () => {
     it('rejects a canary that leaks skills/multi-agent instructions and a features list with multi_agent on', () => {
-      const items = JSON.parse(readFileSync(fixturePath('v0160-prompt-input-locked.json'), 'utf8')) as unknown[];
+      const items = JSON.parse(readFileSync(fixturePath('v0167-prompt-input-locked.json'), 'utf8')) as unknown[];
       const multiAgent = { type: 'message', role: 'developer', content: [{ type: 'input_text', text: '<multi_agent_mode>spawn agents</multi_agent_mode>' }] };
       expect(evaluateCodexPromptInput(JSON.stringify([items[0], multiAgent, items[1]])).ok).toBe(false);
       expect(evaluateCodexPromptInput(JSON.stringify(items)).ok).toBe(true);
 
-      const features = readFileSync(fixturePath('v0160-features-list-locked.txt'), 'utf8');
+      const features = readFileSync(fixturePath('v0167-features-list-locked.txt'), 'utf8');
       const leaky = features.split('\n').map((l) => (l.startsWith('multi_agent ') ? l.replace(/false$/, 'true') : l)).join('\n');
       expect(evaluateCodexFeatures(parseCodexFeaturesList(leaky)!).ok).toBe(false);
       expect(evaluateCodexFeatures(parseCodexFeaturesList(features)!).ok).toBe(true);

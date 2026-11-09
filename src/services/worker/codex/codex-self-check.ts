@@ -4,7 +4,7 @@
  * Five model-free probes, run in order and stopping at the first failure:
  *
  *   1. `codex --version`: parsed and checked against the tested range
- *      (>=0.160.0 <0.161) unless allowUntestedVersion is set. The version is
+ *      (>=0.167.0 <0.168) unless allowUntestedVersion is set. The version is
  *      recorded on the binary fingerprint (find-codex-executable.ts). An exec
  *      model (the observer model, or a different summary model) with a
  *      CODEX_MODEL_MIN_CLI_VERSION floor above the installed version fails
@@ -94,14 +94,15 @@ import type { CodexReasoningEffort, CodexVerbosity } from './codex-transport.js'
 
 /**
  * Tested codex-cli range, until re-validated (plan 2.10). Re-validated on
- * 0.160.0 (model-free probes plus paid canaries); 0.157-0.159 were never
- * tested, and 0.144.x is refused because the 0.156 disables and pins are
- * unknown there.
+ * 0.167.0 (model-free probes plus paid canaries); 0.161-0.166 were never
+ * tested. 0.160.x and older are refused: eight of the 0.167.0 disables are
+ * unknown feature names there, which `--strict-config` rejects, and 0.144.x
+ * does not know the 0.156 disables and pins either.
  */
 export const CODEX_TESTED_VERSION_RANGE = Object.freeze({
-  minInclusive: [0, 160, 0] as const,
-  maxExclusive: [0, 161, 0] as const,
-  label: '>=0.160.0 <0.161',
+  minInclusive: [0, 167, 0] as const,
+  maxExclusive: [0, 168, 0] as const,
+  label: '>=0.167.0 <0.168',
 });
 
 /**

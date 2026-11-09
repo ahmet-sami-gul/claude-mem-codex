@@ -125,6 +125,20 @@ const GOLDEN_LUNA_LOW = [
   '--disable=agent_message_board',
   '--disable=unified_exec_zsh_fork',
   '--disable=daemon_auto_start',
+  '--disable=api_key_cyber_access_programs',
+  '--disable=api_key_model_discovery',
+  '--disable=bedrock_setup_wizard',
+  '--disable=browser_annotation_api',
+  '--disable=cli_daybreak',
+  '--disable=deferred_tool_world_state',
+  '--disable=in_app_voice',
+  '--disable=incremental_tools',
+  '--disable=instant_interrupt',
+  '--disable=mcp_oauth_refresh_coordination',
+  '--disable=plugin_discovery_prefetch',
+  '--disable=prediction_preserve_parent_tools',
+  '--disable=reasoning_effort_override',
+  '--disable=ultrafast_mode',
   '-',
 ];
 
@@ -241,10 +255,15 @@ describe('buildCodexExecArgs: lockdown invariants', () => {
     const args = build();
     const disables = args.filter((token) => token.startsWith('--disable='));
     expect(disables.map((token) => token.slice('--disable='.length))).toEqual([...CODEX_DISABLED_FEATURES]);
-    expect(CODEX_DISABLED_FEATURES.length).toBe(53);
-    expect(new Set(CODEX_DISABLED_FEATURES).size).toBe(53);
+    expect(CODEX_DISABLED_FEATURES.length).toBe(67);
+    expect(new Set(CODEX_DISABLED_FEATURES).size).toBe(67);
     // codex-cli 0.160.0: no background daemon may be started by an observer call.
     expect(CODEX_DISABLED_FEATURES).toContain('daemon_auto_start');
+    // codex-cli 0.167.0: fourteen new defaults that add requests, programs,
+    // modes or model-visible context the observer has no use for.
+    for (const name of ['plugin_discovery_prefetch', 'cli_daybreak', 'ultrafast_mode', 'incremental_tools', 'api_key_cyber_access_programs']) {
+      expect(CODEX_DISABLED_FEATURES).toContain(name);
+    }
     expect(args.some((token) => /^features\.[a-z_0-9]+=false$/.test(token))).toBe(false);
     expect(args.some((token) => token === '--enable' || token.startsWith('--enable='))).toBe(false);
   });
@@ -298,10 +317,13 @@ describe('buildCodexExecArgs: lockdown invariants', () => {
     }
   });
 
-  it('tolerates only enable_request_compression and write_stdin_approval, plus the forced-on unified_exec, as enabled', () => {
+  it('tolerates only enable_request_compression, write_stdin_approval and code_mode_interrupt, plus the forced-on unified_exec, as enabled', () => {
     // write_stdin_approval (0.160.0) only adds an approval step for escalated
     // unified-exec terminals, which the observer never has (shell_tool is off).
-    expect([...CODEX_EXPECTED_ENABLED_FEATURES]).toEqual(['enable_request_compression', 'write_stdin_approval']);
+    // code_mode_interrupt (0.167.0) only terminates code-mode cells on
+    // interrupt, and code_mode is disabled.
+    expect([...CODEX_EXPECTED_ENABLED_FEATURES]).toEqual(['enable_request_compression', 'write_stdin_approval', 'code_mode_interrupt']);
+    expect(CODEX_DISABLED_FEATURES).toContain('code_mode');
     expect([...CODEX_FORCED_ENABLED_FEATURES]).toEqual(['unified_exec']);
     // Still passed as a (documented no-op) disable, and shell_tool stays disabled.
     expect(CODEX_DISABLED_FEATURES).toContain('unified_exec');

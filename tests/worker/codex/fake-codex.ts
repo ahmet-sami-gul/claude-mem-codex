@@ -207,7 +207,7 @@ export interface FakeCodexProbeOptions {
 /**
  * Fake codex answering the five self-check probes by argv[1] (and argv[2]
  * for `debug models` / `debug prompt-input`). Defaults are the codex-cli
- * 0.160.0 captures (the catalog is the trimmed 0.156.1 bundle, unchanged in shape).
+ * 0.167.0 captures (the catalog is the trimmed 0.156.1 bundle, unchanged in shape).
  */
 export function createFakeCodexProbes(options: FakeCodexProbeOptions = {}): FakeCodex {
   const { root, recDir, binDir } = makeRoot('claude-mem-fake-codex-probes-');
@@ -221,13 +221,13 @@ export function createFakeCodexProbes(options: FakeCodexProbeOptions = {}): Fake
     promptInput: join(root, 'prompt-input.json'),
     promptInputErr: join(root, 'prompt-input.err'),
   };
-  writeFileSync(files.version, options.versionOutput ?? 'codex-cli 0.160.0\n');
+  writeFileSync(files.version, options.versionOutput ?? 'codex-cli 0.167.0\n');
   writeFileSync(files.loginOut, options.loginStdout ?? '');
   writeFileSync(files.loginErr, options.loginStderr ?? 'Logged in using ChatGPT\n');
   writeFileSync(files.models, readFileSync(options.modelsFixture ?? fixturePath('v0156-models-catalog.json')));
   writeFileSync(files.modelsErr, options.modelsStderr ?? '');
-  writeFileSync(files.features, readFileSync(options.featuresFixture ?? fixturePath('v0160-features-list-locked.txt')));
-  writeFileSync(files.promptInput, readFileSync(options.promptInputFixture ?? fixturePath('v0160-prompt-input-locked.json')));
+  writeFileSync(files.features, readFileSync(options.featuresFixture ?? fixturePath('v0167-features-list-locked.txt')));
+  writeFileSync(files.promptInput, readFileSync(options.promptInputFixture ?? fixturePath('v0167-prompt-input-locked.json')));
   writeFileSync(files.promptInputErr, options.promptInputStderr ?? '');
 
   const hang = (kind: string): string[] =>

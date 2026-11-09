@@ -3,7 +3,7 @@
   "name": "Claude-Mem (Persistent Memory)",
   "description": "OpenClaw plugin for Claude-Mem. Records observations from embedded runner sessions and streams them to messaging channels.",
   "kind": "memory",
-  "version": "13.25.506",
+  "version": "13.25.507",
   "license": "Apache-2.0",
   "author": "Ahmet Sami Gül (fork of claude-mem by Alex Newman)",
   "homepage": "https://github.com/ahmet-sami-gul/claude-mem-codex",

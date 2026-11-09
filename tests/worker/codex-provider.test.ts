@@ -59,8 +59,8 @@ import type { DatabaseManager } from '../../src/services/worker/DatabaseManager.
 import type { SessionManager } from '../../src/services/worker/SessionManager.js';
 import type { ActiveSession } from '../../src/services/worker-types.js';
 
-const FEATURES = readFileSync(fixturePath('v0160-features-list-locked.txt'), 'utf8');
-const PROMPT_INPUT = readFileSync(fixturePath('v0160-prompt-input-locked.json'), 'utf8');
+const FEATURES = readFileSync(fixturePath('v0167-features-list-locked.txt'), 'utf8');
+const PROMPT_INPUT = readFileSync(fixturePath('v0167-prompt-input-locked.json'), 'utf8');
 const MODELS = readFileSync(fixturePath('v0156-models-catalog.json'), 'utf8');
 
 const mockMode = {
@@ -143,7 +143,7 @@ class FakeTransport implements CodexTransport {
 
 function probeRunner(): (request: CodexProbeRequest) => Promise<CodexProbeResponse> {
   const responses: Record<CodexProbeRequest['kind'], CodexProbeResponse> = {
-    version: { exitCode: 0, signal: null, stdout: 'codex-cli 0.160.0\n', stderr: '', timedOut: false },
+    version: { exitCode: 0, signal: null, stdout: 'codex-cli 0.167.0\n', stderr: '', timedOut: false },
     login_status: { exitCode: 0, signal: null, stdout: '', stderr: 'Logged in using ChatGPT\n', timedOut: false },
     models_catalog: { exitCode: 0, signal: null, stdout: MODELS, stderr: '', timedOut: false },
     features_list: { exitCode: 0, signal: null, stdout: FEATURES, stderr: '', timedOut: false },

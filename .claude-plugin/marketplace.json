@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "claude-mem",
-      "version": "13.25.506",
+      "version": "13.25.507",
       "source": "./plugin",
       "description": "Persistent memory for Claude Code (unofficial claude-mem fork with a Codex CLI observer provider)"
     }

@@ -1,6 +1,6 @@
 {
   "name": "claude-mem",
-  "version": "13.25.506",
+  "version": "13.25.507",
   "description": "Memory compression system for Claude Code - persist context across sessions (claude-mem-codex: unofficial fork of claude-mem by Alex Newman that adds a Codex CLI observer provider)",
   "keywords": [
     "claude",

@@ -246,8 +246,9 @@ export const CODEX_V2_MODEL_PINS: Readonly<Record<string, string>> = Object.free
 
 /**
  * Every feature turned off with `--disable=<name>`: the 27 Phase 0 names, the
- * codex-cli 0.156.1 additions, then the 0.160.0 one. All 53 are known names on
- * 0.156.1 and 0.160.0; the 0.156 additions are unknown on 0.144.4, where an
+ * codex-cli 0.156.1 additions, the 0.160.0 one, then the 0.167.0 ones. The
+ * first 53 are known names on 0.156.1, 0.160.0 and 0.167.0, and all 67 on
+ * 0.167.0; the 0.156 additions are unknown on 0.144.4, where an
  * unknown `--disable` is a hard error, so an older binary is refused rather
  * than half locked down. After these (and
  * CODEX_CONFIG_PINS), `codex features list` shows only
@@ -320,6 +321,29 @@ export const CODEX_DISABLED_FEATURES = Object.freeze([
   // daemon for eligible interactive launches; a one-shot exec is not one, but
   // nothing in the observer may leave a background process behind.
   'daemon_auto_start',
+  // codex-cli 0.167.0: on by default (instant_interrupt while still "under
+  // development"). Each adds something the observer has no use for: requests
+  // or prefetches (API-key model discovery, the plugin directory, MCP OAuth
+  // refresh), a different program, mode or billing path (API-key access
+  // programs, Daybreak's automatic access-program selection, Ultra Fast),
+  // model-visible context (deferred-tool and incremental tool world state,
+  // inherited tool declarations, reasoning-effort configuration items), a
+  // desktop or TUI surface (browser annotation, in-app Voice, Bedrock setup),
+  // or preemption on new user input, which a one-shot exec never gets.
+  'api_key_cyber_access_programs',
+  'api_key_model_discovery',
+  'bedrock_setup_wizard',
+  'browser_annotation_api',
+  'cli_daybreak',
+  'deferred_tool_world_state',
+  'in_app_voice',
+  'incremental_tools',
+  'instant_interrupt',
+  'mcp_oauth_refresh_coordination',
+  'plugin_discovery_prefetch',
+  'prediction_preserve_parent_tools',
+  'reasoning_effort_override',
+  'ultrafast_mode',
 ] as const);
 
 /**
@@ -331,10 +355,16 @@ export const CODEX_DISABLED_FEATURES = Object.freeze([
  * adds an approval step before input is written to an escalated unified-exec
  * terminal. The observer never has a terminal (shell_tool is off), so it is
  * left on rather than switching off a safeguard.
+ *
+ * code_mode_interrupt (stable and on by default since codex-cli 0.167.0) only
+ * terminates active code-mode cells when their turn is interrupted. code_mode
+ * is disabled, so there are none; like write_stdin_approval it is a safeguard
+ * and stays on.
  */
 export const CODEX_EXPECTED_ENABLED_FEATURES = Object.freeze([
   'enable_request_compression',
   'write_stdin_approval',
+  'code_mode_interrupt',
 ] as const);
 
 /**
